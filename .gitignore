@@ -1,0 +1,4 @@
+/target
+/shots
+# machine-specific build settings for the Craft Anything sandbox (vendored crates, zig linker)
+/.cargo/config.toml

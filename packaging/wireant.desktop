@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Wire Antenna Analyser
+GenericName=Antenna analyser
+Comment=Model wire antennas: impedance, SWR, gain and radiation patterns (MININEC and NEC-2)
+Exec=wireant %f
+Icon=wireant
+Terminal=false
+Categories=HamRadio;Science;Engineering;Education;
+Keywords=antenna;NEC;MININEC;MMANA;EZNEC;ham;radio;
+MimeType=application/x-mmana-antenna;application/x-nec-antenna;application/x-eznec-antenna;
+StartupWMClass=wireant

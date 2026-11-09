@@ -1,0 +1,251 @@
+{
+ "version": 1,
+ "values": [
+  {
+   "name": "speed of light constant for wavelength",
+   "group": "calculation",
+   "value": 299.792458,
+   "unit": "m*MHz",
+   "source": "FFSolver.exe 0x408590 (DAT_00425a70)"
+  },
+  {
+   "name": "default frequency",
+   "group": "calculation",
+   "value": 14.15,
+   "unit": "MHz",
+   "source": "FFSolver.exe DAT_00425af8"
+  },
+  {
+   "name": "most pulses",
+   "group": "calculation",
+   "value": 40000,
+   "source": "FFSolver.exe 0x408a40"
+  },
+  {
+   "name": "SWR reference impedance",
+   "group": "calculation",
+   "value": 50.0,
+   "unit": "ohm",
+   "source": "example .maa files (G/H/M/R line)"
+  },
+  {
+   "name": "shortest auto segment (wavelength divided by DM1)",
+   "group": "segmentation",
+   "value": 400.0,
+   "source": "most common in the 722 example .maa files"
+  },
+  {
+   "name": "longest auto segment (wavelength divided by DM2)",
+   "group": "segmentation",
+   "value": 40.0,
+   "source": "most common in the 722 example .maa files"
+  },
+  {
+   "name": "segment growth factor SC",
+   "group": "segmentation",
+   "value": 2.0,
+   "source": "most common in the 722 example .maa files"
+  },
+  {
+   "name": "shortest segments at each wire end EC",
+   "group": "segmentation",
+   "value": 1,
+   "source": "FFSolver.exe 0x405540; default from example files"
+  },
+  {
+   "name": "fixed segment count forced even, at least",
+   "group": "segmentation",
+   "value": 2,
+   "source": "FFSolver.exe 0x405390"
+  },
+  {
+   "name": "wire shorter than wavelength divided by this gets 2 segments",
+   "group": "segmentation",
+   "value": 1500.0,
+   "source": "FFSolver.exe 0x405390 (DAT_00425b38)"
+  },
+  {
+   "name": "middle segment re-split threshold",
+   "group": "segmentation",
+   "value": 0.85,
+   "source": "FFSolver.exe 0x405540 (DAT_00425b20)"
+  },
+  {
+   "name": "far-field gain floor",
+   "group": "far field",
+   "value": -999.0,
+   "unit": "dB",
+   "source": "FFSolver.exe 0x4093e0 (DAT_00425d20)"
+  },
+  {
+   "name": "far-field gain normalisation",
+   "group": "far field",
+   "value": 0.033356,
+   "source": "FFSolver.exe 0x4093e0 (DAT_00425d40)"
+  },
+  {
+   "name": "ground permittivity factor 2*pi*eps0*1e6",
+   "group": "ground",
+   "value": 5.5606189968539335e-05,
+   "source": "FFSolver.exe 0x4093e0 (DAT_00425d48)"
+  },
+  {
+   "name": "load reactance factor 2*pi",
+   "group": "loads",
+   "value": 6.283185307179586,
+   "source": "FFSolver.exe 0x408200 (DAT_00425b10)"
+  },
+  {
+   "name": "load capacitance factor 2*pi*1e-6",
+   "group": "loads",
+   "value": 6.283185307179586e-06,
+   "source": "FFSolver.exe 0x408200 (DAT_00425b08)"
+  },
+  {
+   "name": "L and C together form",
+   "group": "loads",
+   "value": "parallel trap, Q on L",
+   "source": "FFSolver.exe 0x407460"
+  },
+  {
+   "name": "real ground relative permittivity",
+   "group": "ground",
+   "value": 13.0,
+   "estimated": true
+  },
+  {
+   "name": "real ground conductivity",
+   "group": "ground",
+   "value": 5.0,
+   "unit": "mS/m",
+   "estimated": true
+  },
+  {
+   "name": "copper conductivity",
+   "group": "wire material",
+   "value": 58000000.0,
+   "unit": "S/m",
+   "source": "standard physical constant"
+  },
+  {
+   "name": "aluminium conductivity",
+   "group": "wire material",
+   "value": 35000000.0,
+   "unit": "S/m",
+   "estimated": true
+  },
+  {
+   "name": "dBd offset from dBi",
+   "group": "results",
+   "value": 2.15,
+   "unit": "dB",
+   "source": "half-wave dipole gain"
+  },
+  {
+   "name": "optimizer first step (fraction of wavelength)",
+   "group": "optimizer",
+   "value": 0.01,
+   "estimated": true
+  },
+  {
+   "name": "optimizer most steps",
+   "group": "optimizer",
+   "value": 60,
+   "estimated": true
+  },
+  {
+   "name": "sweep default points",
+   "group": "frequency sweep",
+   "value": 41,
+   "estimated": true
+  },
+  {
+   "name": "F/B rear range azimuth",
+   "group": "far field",
+   "value": 120.0,
+   "unit": "deg",
+   "source": "example .maa files (G/H/M/R/AzEl/X line, 307 of 330) and english.mmn 'Rear range of F/B'"
+  },
+  {
+   "name": "F/B rear range vertical",
+   "group": "far field",
+   "value": 60.0,
+   "unit": "deg",
+   "source": "example .maa files (G/H/M/R/AzEl/X line, 307 of 330) and english.mmn 'Rear range of F/B'"
+  },
+  {
+   "name": "SC upper limit",
+   "group": "segmentation",
+   "value": 3.0,
+   "source": "english.mmn hint 'SC: the easing parameter (multiplier), 1 < SC <= 3'"
+  },
+  {
+   "name": "number of wire materials",
+   "group": "wire material",
+   "value": 9,
+   "source": "english.mmn WireSel0..WireSel8"
+  },
+  {
+   "name": "iron relative permeability",
+   "group": "wire material",
+   "value": 100.0,
+   "estimated": true
+  },
+  {
+   "name": "iron conductivity",
+   "group": "wire material",
+   "value": 10000000.0,
+   "unit": "S/m",
+   "estimated": true
+  },
+  {
+   "name": "3D min of dB scale default",
+   "group": "3D pattern",
+   "value": -40.0,
+   "unit": "dB",
+   "source": "MMFarField.exe DAT_004b7238 (saved by 0x403a34)"
+  },
+  {
+   "name": "min dB lower limit",
+   "group": "3D pattern",
+   "value": -100.0,
+   "unit": "dB",
+   "source": "MMFarField.exe 0x407a5c"
+  },
+  {
+   "name": "min dB step 10 below",
+   "group": "3D pattern",
+   "value": -20.0,
+   "unit": "dB",
+   "source": "MMFarField.exe 0x407a5c (DAT_00407c24)"
+  },
+  {
+   "name": "min dB step 1 above",
+   "group": "3D pattern",
+   "value": -10.0,
+   "unit": "dB",
+   "source": "MMFarField.exe 0x407a5c (DAT_00407c28)"
+  },
+  {
+   "name": "cursor gain floor",
+   "group": "far field",
+   "value": -100.0,
+   "unit": "dBi",
+   "source": "MMFarField.exe 0x406480"
+  },
+  {
+   "name": "3D pan per window width",
+   "group": "3D pattern",
+   "value": 2.8,
+   "unit": "scene units",
+   "source": "MMFarField.exe 0x404f14 (constant 0x4050c0)"
+  },
+  {
+   "name": "3D pan per window height",
+   "group": "3D pattern",
+   "value": 2.5,
+   "unit": "scene units",
+   "source": "MMFarField.exe 0x404f14 (constant 0x4050c8)"
+  }
+ ]
+}

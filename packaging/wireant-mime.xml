@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-mmana-antenna">
+    <comment>MMANA antenna file</comment>
+    <glob pattern="*.maa"/>
+    <glob pattern="*.MAA"/>
+  </mime-type>
+  <mime-type type="application/x-nec-antenna">
+    <comment>NEC antenna deck</comment>
+    <glob pattern="*.nec"/>
+    <glob pattern="*.NEC"/>
+  </mime-type>
+  <mime-type type="application/x-eznec-antenna">
+    <comment>EZNEC antenna file</comment>
+    <glob pattern="*.ez"/>
+    <glob pattern="*.EZ"/>
+  </mime-type>
+</mime-info>
