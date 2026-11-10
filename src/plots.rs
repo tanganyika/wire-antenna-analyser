@@ -245,7 +245,9 @@ pub struct Series<'a> {
 
 fn nice_range(lo: f64, hi: f64) -> (f64, f64, f64) {
     let (mut lo, mut hi) = (lo, hi);
-    if !(hi > lo) {
+    // a flat series (equal to within rounding, e.g. F/B of a dipole) gets a ±1 range;
+    // a step below the values' resolution would never advance the tick loops
+    if !(hi - lo > 1e-9 * lo.abs().max(hi.abs()).max(1.0)) {
         lo -= 1.0;
         hi += 1.0;
     }
@@ -254,6 +256,13 @@ fn nice_range(lo: f64, hi: f64) -> (f64, f64, f64) {
     let mag = 10f64.powf(raw.log10().floor());
     let step = [1.0, 2.0, 2.5, 5.0, 10.0].iter().map(|m| m * mag).find(|s| *s >= raw).unwrap_or(10.0 * mag);
     ((lo / step).floor() * step, (hi / step).ceil() * step, step)
+}
+
+/// Tick values a, a+step, … up to b, counted rather than accumulated (so a step
+/// that is tiny next to the values can't stall), at most 200 of them.
+fn ticks(a: f64, b: f64, step: f64) -> impl Iterator<Item = f64> {
+    let n = if step > 0.0 && b >= a { (((b - a) / step) + 1e-9).floor().min(200.0) as usize } else { 0 };
+    (0..=n).map(move |i| a + i as f64 * step)
 }
 
 /// Line chart with up to two y axes. `fixed` overrides the left axis range.
@@ -290,31 +299,25 @@ pub fn xy(ui: &mut egui::Ui, size: Vec2, title: &str, xlabel: &str, series: &[Se
     let xs = |x: f64| plot.left() + ((x - x0) / (x1 - x0).max(1e-12)) as f32 * plot.width();
     // x grid
     let (gx0, gx1, gstep) = nice_range(x0, x1);
-    let mut gx = gx0;
-    while gx <= gx1 + 1e-9 {
+    for gx in ticks(gx0, gx1, gstep) {
         if gx >= x0 - 1e-9 && gx <= x1 + 1e-9 {
             let x = xs(gx);
             painter.line_segment([Pos2::new(x, plot.top()), Pos2::new(x, plot.bottom())], Stroke::new(0.5, GRID));
             painter.text(Pos2::new(x, plot.bottom() + 3.0), Align2::CENTER_TOP, format!("{}", trim(gx)), small.clone(), Color32::DARK_GRAY);
         }
-        gx += gstep;
     }
     painter.text(Pos2::new(plot.center().x, rect.bottom() - 3.0), Align2::CENTER_BOTTOM, xlabel, small.clone(), Color32::DARK_GRAY);
     if let Some((a, b, st)) = ly {
-        let mut v = a;
-        while v <= b + 1e-9 {
+        for v in ticks(a, b, st) {
             let y = plot.bottom() - ((v - a) / (b - a)) as f32 * plot.height();
             painter.line_segment([Pos2::new(plot.left(), y), Pos2::new(plot.right(), y)], Stroke::new(0.5, GRID));
             painter.text(Pos2::new(plot.left() - 4.0, y), Align2::RIGHT_CENTER, trim(v), small.clone(), Color32::DARK_GRAY);
-            v += st;
         }
     }
     if let Some((a, b, st)) = ry {
-        let mut v = a;
-        while v <= b + 1e-9 {
+        for v in ticks(a, b, st) {
             let y = plot.bottom() - ((v - a) / (b - a)) as f32 * plot.height();
             painter.text(Pos2::new(plot.right() + 4.0, y), Align2::LEFT_CENTER, trim(v), small.clone(), Color32::DARK_GRAY);
-            v += st;
         }
     }
     painter.rect_stroke(plot, 0.0, Stroke::new(1.0, Color32::GRAY), StrokeKind::Middle);
@@ -774,6 +777,16 @@ pub fn pattern3d(ui: &mut egui::Ui, size: Vec2, p: &crate::mom::Patterns, st: &m
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn flat_and_near_flat_ranges_have_few_ticks() {
+        for (lo, hi) in [(0.0, 0.0), (14.0, 14.0 + 1e-15), (-3e-16, 4e-16), (1e9, 1e9 + 1e-6), (1.0, 2.0)] {
+            let (a, b, st) = nice_range(lo, hi);
+            let n = ticks(a, b, st).count();
+            assert!((2..=12).contains(&n), "{lo}..{hi}: {n} ticks");
+            assert!(a + st > a, "{lo}..{hi}: step {st} does not advance");
+        }
+    }
+
     #[test]
     fn min_db_steps_like_the_original() {
         assert_eq!(step_min_db(-40.0, true), -30.0);
