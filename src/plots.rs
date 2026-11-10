@@ -496,6 +496,38 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
             painter.line_segment([proj([ctr[0] - g, ctr[1] + t, 0.0]), proj([ctr[0] + g, ctr[1] + t, 0.0])], col);
         }
     }
+    // second ground's boundary (blue), labelled on its side
+    let sm = &ant.ground.second;
+    if ant.ground.kind != GroundKind::Free && sm.enabled {
+        let blue = Color32::from_rgb(40, 110, 200);
+        let st2 = Stroke::new(1.8, blue);
+        let span = ((hi[0] - lo[0]).max(hi[1] - lo[1]) * 0.75).max(ext * 0.25);
+        let label = format!("second ground (εr {}, σ {} mS/m)", sm.eps_r, sm.sigma_ms);
+        if sm.circle {
+            let r = sm.distance.max(0.0);
+            let pts: Vec<Pos2> = (0..=96).map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 96.0;
+                proj([r * a.cos(), r * a.sin(), 0.0])
+            }).collect();
+            painter.add(egui::Shape::line(pts, st2));
+            painter.text(proj([r * 1.05 + span * 0.05, 0.0, 0.0]), Align2::LEFT_CENTER, label, FontId::proportional(11.0), blue);
+        } else {
+            let b = sm.bearing_deg.to_radians();
+            let (nx, ny) = (b.cos(), b.sin());
+            let (px, py) = (sm.distance * nx, sm.distance * ny);
+            let l = span.max(sm.distance.abs()) * 1.5;
+            painter.line_segment([proj([px - l * ny, py + l * nx, 0.0]), proj([px + l * ny, py - l * nx, 0.0])], st2);
+            if sm.drop > 0.0 {
+                let d = -sm.drop;
+                painter.line_segment([proj([px - l * ny, py + l * nx, d]), proj([px + l * ny, py - l * nx, d])], Stroke::new(1.0, blue));
+                painter.line_segment([proj([px, py, 0.0]), proj([px, py, d])], Stroke::new(1.0, blue));
+            }
+            let a = span * 0.15;
+            let tip = proj([px + a * nx, py + a * ny, 0.0]);
+            painter.line_segment([proj([px, py, 0.0]), tip], st2);
+            painter.text(tip, Align2::LEFT_CENTER, label, FontId::proportional(11.0), blue);
+        }
+    }
     // axes
     let al = ext * 0.15;
     let o = [ctr[0] - (hi[0] - lo[0]) / 2.0 - al * 0.5, ctr[1] - (hi[1] - lo[1]) / 2.0 - al * 0.5, lo[2]];

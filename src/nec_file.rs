@@ -191,6 +191,8 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
     let mut freq = None;
     let mut ge = 0i64;
     let mut gn: Option<(i64, f64, f64)> = None;
+    let mut gd: Option<(f64, f64, f64, f64)> = None;
+    let mut second_cm: Option<crate::model::SecondMedium> = None;
     let mut ex: Vec<(i64, i64, f64, f64)> = Vec::new();
     let mut ld: Vec<(i64, i64, i64, i64, f64, f64, f64)> = Vec::new();
     let mut insul: HashMap<usize, (f64, f64)> = HashMap::new();
@@ -217,6 +219,8 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
                     if v.len() >= 3 && v[0] >= 1.0 {
                         insul.insert(v[0] as usize - 1, (v[1], v[2]));
                     }
+                } else if let Some(sm) = crate::model::SecondMedium::decode(&c) {
+                    second_cm = Some(sm);
                 } else if let Some(x) = c.strip_prefix("wireant line") {
                     let v: Vec<f64> = x.split_whitespace().filter_map(|s| s.parse().ok()).collect();
                     if v.len() >= 3 && v[0] >= 1.0 {
@@ -359,6 +363,8 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
             }
             "GE" => ge = int(0)?,
             "GN" => gn = Some((int(0)?, num(4)?, num(5)?)),
+            // second medium: εr, σ, CLT, CHT (linear along +X unless a CM line says more)
+            "GD" => gd = Some((num(4)?, num(5)?, num(6)?, num(7)?)),
             "EX" => {
                 let ty = int(0)?;
                 if ty != 0 {
@@ -434,6 +440,23 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
             }
         }
     };
+    if ant.ground.kind != GroundKind::Free {
+        if let Some(sm) = second_cm {
+            ant.ground.second = sm;
+        } else if let Some((eps, sig, clt, cht)) = gd {
+            ant.ground.second = crate::model::SecondMedium {
+                enabled: true,
+                eps_r: eps,
+                sigma_ms: sig * 1000.0,
+                circle: false,
+                distance: clt,
+                bearing_deg: 0.0,
+                drop: cht,
+                fresnel: false,
+            };
+            warn.push("GD card: taken as a linear cliff along +X with NEC-2's reflection-point rule (the RP card decides linear or circular)".into());
+        }
+    }
     // (tag, segment) -> (wire, position along it)
     let locate = |tag: i64, seg: i64| -> Option<(usize, f64)> {
         if tag > 0 {
@@ -564,6 +587,11 @@ pub fn write(ant: &Antenna) -> String {
     for (i, t) in ant.lines.iter().enumerate().filter(|(_, t)| t.vf != 1.0 || t.loss_db != 0.0) {
         o += &format!("CM wireant line {} {} {}\n", i + 1, t.vf, t.loss_db);
     }
+    if ant.ground.second.enabled && ant.ground.kind != GroundKind::Free {
+        // the full second-medium description; NEC-2 itself only reads the GD card
+        // (its linear cliff runs along +X: other bearings need the antenna turned)
+        o += &format!("CM {}\n", ant.ground.second.encode());
+    }
     o += "CE\n";
     let lam = ant.lambda();
     let grounded = ant.ground.kind != GroundKind::Free;
@@ -597,6 +625,11 @@ pub fn write(ant: &Antenna) -> String {
         GroundKind::Free => {}
         GroundKind::Perfect => o += "GN 1\n",
         GroundKind::Real => o += &format!("GN 2 0 0 0 {} {}\n", n(ant.ground.eps_r), n(ant.ground.sigma_ms * 1e-3)),
+    }
+    let sm = &ant.ground.second;
+    let second = sm.enabled && grounded;
+    if second {
+        o += &format!("GD 0 0 0 0 {} {} {} {}\n", n(sm.eps_r), n(sm.sigma_ms * 1e-3), n(sm.distance.max(0.0)), n(sm.drop.max(0.0)));
     }
     let seg_of = |wire: usize, pos: f64| -> usize { ((pos * nsegs[wire] as f64).floor() as usize + 1).clamp(1, nsegs[wire]) };
     if let Some((sig, mu)) = ant.material.conduction(ant.user_rho, ant.user_mu) {
@@ -656,7 +689,9 @@ pub fn write(ant: &Antenna) -> String {
         o += &format!("TL {} {} {} {} {} {} 0 0 0 0\n", t.a_wire + 1, seg_of(t.a_wire, t.a_pos), t.b_wire + 1, seg_of(t.b_wire, t.b_pos), n(z0), n(len));
     }
     o += &format!("FR 0 1 0 0 {} 0\n", n(ant.freq_mhz));
-    o += "RP 0 91 361 1000 0 0 1 1\nEN\n";
+    // RP mode 2 = linear cliff (along +X in NEC-2), 3 = circular
+    let mode = if second { if sm.circle { 3 } else { 2 } } else { 0 };
+    o += &format!("RP {mode} 91 361 1000 0 0 1 1\nEN\n");
     o
 }
 
@@ -693,6 +728,20 @@ mod tests {
         assert_eq!((b.a_wire, b.b_wire, b.reversed), (1, 0, true));
         assert!((b.z0 - 75.0).abs() < 1e-9 && (b.length - 9.1).abs() < 1e-6 && (b.vf - 0.66).abs() < 1e-9 && (b.loss_db - 1.5).abs() < 1e-9, "{b:?}");
         assert!((b.a_pos - 0.5).abs() < 1e-9 && (b.b_pos - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn second_ground_round_trip_and_plain_gd() {
+        let mut a = Antenna::example(0);
+        a.ground.kind = GroundKind::Real;
+        a.ground.second = crate::model::SecondMedium { enabled: true, circle: false, distance: 25.0, bearing_deg: 45.0, drop: 3.0, fresnel: true, eps_r: 81.0, sigma_ms: 5000.0 };
+        let text = write(&a);
+        assert!(text.contains("GD 0 0 0 0 ") && text.contains("RP 2 "), "{text}");
+        assert_eq!(parse(&text, "x").unwrap().ant.ground.second, a.ground.second);
+        // a deck from elsewhere: GD alone is NEC-2's linear cliff along +X
+        let deck = "CM x\nCE\nGW 1 11 0 -5 10 0 5 10 0.001\nGE 1\nGN 2 0 0 0 13 0.005\nGD 0 0 0 0 80 4 40 2\nEX 0 1 6 0 1 0\nFR 0 1 0 0 14 0\nRP 2 1 1 1000 80 0 0 0\nEN\n";
+        let s = parse(deck, "x").unwrap().ant.ground.second;
+        assert!(s.enabled && !s.circle && !s.fresnel && s.distance == 40.0 && s.drop == 2.0 && s.sigma_ms == 4000.0, "{s:?}");
     }
 
     #[test]

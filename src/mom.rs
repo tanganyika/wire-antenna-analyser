@@ -624,6 +624,23 @@ impl Radiator {
         Radiator { pos: vec![], cur: vec![], k: 2.0 * PI * f / C0, ground: ground.clone(), lambda: C0 / f, gain_const: 0.0, external: Some(gain) }
     }
 
+    /// Image sums weighted by the primary and second ground's shares of each
+    /// element's reflection (see `wiremom::farground`).
+    fn image_split(&self, r: V3, sg: &wiremom::SecondGround, el: f64, az: f64) -> ([C; 3], [C; 3]) {
+        let ray = wiremom::farground::Ray::new(el, az, self.k);
+        let (mut a, mut b) = ([C::new(0.0, 0.0); 3], [C::new(0.0, 0.0); 3]);
+        for (p, c) in self.pos.iter().zip(self.cur.iter()) {
+            let ph = C::from_polar(1.0, self.k * dot(r, mirror(*p)));
+            let (w1, w2) = sg.weights(*p, &ray);
+            let v = [-c[0] * ph, -c[1] * ph, c[2] * ph];
+            for i in 0..3 {
+                a[i] += v[i] * w1;
+                b[i] += v[i] * w2;
+            }
+        }
+        (a, b)
+    }
+
     fn sum(&self, r: V3, image: bool) -> [C; 3] {
         let mut s = [C::new(0.0, 0.0); 3];
         for (p, c) in self.pos.iter().zip(self.cur.iter()) {
@@ -648,25 +665,34 @@ impl Radiator {
         let proj = |v: &[C; 3], u: V3| v[0] * u[0] + v[1] * u[1] + v[2] * u[2];
         let d = self.sum(r, false);
         let (mut et, mut ep) = (proj(&d, th), proj(&d, ph));
-        match self.ground.kind {
-            GroundKind::Free => {}
+        // plane-wave reflection coefficients (vertical, horizontal) of a ground
+        let fresnel = |eps_r: f64, sigma_ms: f64| {
+            // ε_c = εr − jσ/(f·2π·ε0·10⁶), f in MHz, σ in S/m (FFSolver 0x4093e0, DAT_00425d48)
+            const TWO_PI_EPS0_E6: f64 = 5.5606189968539335e-05;
+            let f_mhz = C0 / self.lambda * 1e-6;
+            let ec = C::new(eps_r, -(sigma_ms * 1e-3) / (f_mhz * TWO_PI_EPS0_E6));
+            let s = el.sin();
+            let c2 = el.cos() * el.cos();
+            let root = (ec - c2).sqrt();
+            ((ec * s - root) / (ec * s + root), (s - root) / (s + root))
+        };
+        let (rv, rh) = match self.ground.kind {
+            GroundKind::Free => (C::new(0.0, 0.0), C::new(0.0, 0.0)),
             _ if el < 0.0 => return Gain::default(),
-            GroundKind::Perfect => {
+            GroundKind::Perfect => (C::new(1.0, 0.0), C::new(-1.0, 0.0)),
+            GroundKind::Real => fresnel(self.ground.eps_r, self.ground.sigma_ms),
+        };
+        if self.ground.kind != GroundKind::Free {
+            let second = if self.ground.second.enabled { self.ground.second.to_wiremom() } else { None };
+            if let Some(sg) = second {
+                let (i1, i2) = self.image_split(r, &sg, el, az);
+                let (rv2, rh2) = fresnel(sg.ground.eps_r, sg.ground.sigma * 1e3);
+                // medium 2 lies `drop` lower: its image is 2 drop further down
+                let shift = C::from_polar(1.0, -2.0 * self.k * sg.drop * el.sin());
+                et += rv * proj(&i1, th) + rv2 * shift * proj(&i2, th);
+                ep += -rh * proj(&i1, ph) - rh2 * shift * proj(&i2, ph);
+            } else {
                 let i = self.sum(r, true);
-                et += proj(&i, th);
-                ep += proj(&i, ph);
-            }
-            GroundKind::Real => {
-                let i = self.sum(r, true);
-                // ε_c = εr − jσ/(f·2π·ε0·10⁶), f in MHz, σ in S/m (FFSolver 0x4093e0, DAT_00425d48)
-                const TWO_PI_EPS0_E6: f64 = 5.5606189968539335e-05;
-                let f_mhz = C0 / self.lambda * 1e-6;
-                let ec = C::new(self.ground.eps_r, -(self.ground.sigma_ms * 1e-3) / (f_mhz * TWO_PI_EPS0_E6));
-                let s = el.sin();
-                let c2 = el.cos() * el.cos();
-                let root = (ec - c2).sqrt();
-                let rv = (ec * s - root) / (ec * s + root);
-                let rh = (s - root) / (s + root);
                 et += rv * proj(&i, th);
                 ep += -rh * proj(&i, ph);
             }

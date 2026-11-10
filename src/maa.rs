@@ -97,6 +97,8 @@ pub fn parse(text: &str) -> Result<Antenna, String> {
                 "segmentation".into()
             } else if raw.starts_with("g/h") {
                 "g/h/m/r/azel/x".into()
+            } else if raw.starts_with("second ground") {
+                "second ground".into()
             } else if raw.starts_with("ground") {
                 "ground".into()
             } else if raw.starts_with("insulation") {
@@ -190,6 +192,13 @@ pub fn parse(text: &str) -> Result<Antenna, String> {
                     ant.wires[wi - 1].ins_eps = f(v.get(2), 1.0);
                 }
             }
+            "second ground" => {
+                // this program's extension: εr, σ (mS/m), line|circle, distance,
+                // bearing, drop, fresnel|specular
+                if let Some(sm) = crate::model::SecondMedium::decode(&format!("wireant ground2 {}", line.replace(',', " "))) {
+                    ant.ground.second = sm;
+                }
+            }
             s if s.starts_with("ground") => {
                 if v.len() >= 2 {
                     ant.ground.eps_r = f(v.first(), 13.0);
@@ -271,6 +280,11 @@ pub fn write(ant: &Antenna) -> String {
     if ant.ground.eps_r != 13.0 || ant.ground.sigma_ms != 5.0 {
         o += &format!("*** Ground ***\n{},\t{}\n", g(ant.ground.eps_r), g(ant.ground.sigma_ms));
     }
+    if ant.ground.second.enabled {
+        let e = ant.ground.second.encode();
+        let vals: Vec<&str> = e.split_whitespace().skip(2).collect();
+        o += &format!("*** Second ground ***\n{}\n", vals.join(",\t"));
+    }
     o += "### Comment ###\n";
     o += &ant.comment;
     o += "\n";
@@ -286,6 +300,7 @@ mod tests {
             let mut a = Antenna::example(i);
             a.loads.push(Load { wire: 0, pos: 0.25, kind: LoadKind::Lc { l_uh: 1.5, c_pf: 0.0, q: 200.0 } });
             a.comment = "hello\nworld".into();
+            a.ground.second = crate::model::SecondMedium { enabled: true, circle: true, distance: 42.5, bearing_deg: 30.0, drop: 2.0, fresnel: false, eps_r: 70.0, sigma_ms: 4000.0 };
             let t = write(&a);
             let b = parse(&t).unwrap();
             assert_eq!(a.wires.len(), b.wires.len());
@@ -293,6 +308,7 @@ mod tests {
             assert_eq!(a.loads, b.loads, "{t}");
             assert_eq!(a.ground.kind, b.ground.kind);
             assert_eq!(a.comment, b.comment);
+            assert_eq!(a.ground.second, b.ground.second);
         }
     }
 

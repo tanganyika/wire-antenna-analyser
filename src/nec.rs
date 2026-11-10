@@ -161,6 +161,27 @@ fn num(x: f64) -> String {
     format!("{:.7E}", x)
 }
 
+/// The second ground medium as NEC-2 sees it: (RP mode 2 linear / 3 circular,
+/// rotation in degrees).  NEC-2's linear cliff runs parallel to Y at x = CLT, so
+/// for another bearing the structure is turned by -bearing (GM) and the pattern
+/// back by +bearing.
+fn second_medium(ant: &Antenna) -> Option<(u8, f64)> {
+    let s = &ant.ground.second;
+    (s.enabled && ant.ground.kind != GroundKind::Free).then(|| if s.circle { (3, 0.0) } else { (2, s.bearing_deg) })
+}
+
+/// Runs a deck with these RP cards; pattern azimuths in the antenna's own frame.
+fn run_deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<Report, String> {
+    let mut rep = parse(&run(&deck(ant, lay, freq_mhz, rps)?)?)?;
+    // the cards asked for azimuths shifted by -rot, so this lands back on them
+    if let Some((_, rot)) = second_medium(ant).filter(|s| s.1 != 0.0) {
+        for p in rep.pattern.iter_mut() {
+            p[1] += rot;
+        }
+    }
+    Ok(rep)
+}
+
 fn deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<String, String> {
     if !ant.plates.is_empty() {
         // NEC-2 patches only model closed surfaces (MFIE)
@@ -186,11 +207,19 @@ fn deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<St
             p.tag, p.nseg, num(p.a[0]), num(p.a[1]), num(zc(p.a[2])), num(p.b[0]), num(p.b[1]), num(zc(p.b[2])), num(r)
         );
     }
+    let second = second_medium(ant);
+    if let Some((_, rot)) = second.filter(|s| s.1 != 0.0) {
+        d += &format!("GM 0 0 0 0 {} 0 0 0 0\n", num(-rot));
+    }
     d += if grounded { "GE 1\n" } else { "GE 0\n" };
     match ant.ground.kind {
         GroundKind::Free => {}
         GroundKind::Perfect => d += "GN 1\n",
         GroundKind::Real => d += &format!("GN 2 0 0 0 {} {}\n", num(ant.ground.eps_r), num(ant.ground.sigma_ms * 1e-3)),
+    }
+    if second.is_some() {
+        let s = &ant.ground.second;
+        d += &format!("GD 0 0 0 0 {} {} {} {}\n", num(s.eps_r), num(s.sigma_ms * 1e-3), num(s.distance.max(0.0)), num(s.drop.max(0.0)));
     }
     if let Some((sig, mu_r)) = ant.material.conduction(ant.user_rho, ant.user_mu) {
         // NEC has no permeability: the same skin-effect loss needs σ/μr
@@ -236,7 +265,19 @@ fn deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<St
         d += "XQ\n";
     }
     for rp in rps {
-        d += rp;
+        match second {
+            // cliff mode, and the azimuths in the rotated frame
+            Some((mode, rot)) => {
+                let mut t: Vec<String> = rp.split_whitespace().map(String::from).collect();
+                t[1] = mode.to_string();
+                if rot != 0.0 {
+                    let phis: f64 = t[6].parse().unwrap_or(0.0);
+                    t[6] = num(phis - rot);
+                }
+                d += &t.join(" ");
+            }
+            None => d += rp,
+        }
         d += "\n";
     }
     d += "EN\n";
@@ -437,7 +478,7 @@ pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) ->
     let lay = layout(ant, 299.792458 / seg_freq_mhz);
     let grounded = ant.ground.kind != GroundKind::Free;
     let rps = if need_far { vec![grid_rp(grounded).0] } else { vec![] };
-    let rep = parse(&run(&deck(ant, &lay, freq_mhz, &rps)?)?)?;
+    let rep = run_deck(ant, &lay, freq_mhz, &rps)?;
     Ok(result(ant, freq_mhz, &lay, &rep, need_far, t.elapsed().as_secs_f64() * 1e3).0)
 }
 
@@ -448,7 +489,7 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     let lay = layout(ant, ant.lambda());
     let grounded = ant.ground.kind != GroundKind::Free;
     let (grid_card, grid_els) = grid_rp(grounded);
-    let rep = parse(&run(&deck(ant, &lay, f, &[grid_card])?)?)?;
+    let rep = run_deck(ant, &lay, f, &[grid_card])?;
     let t1 = t.elapsed().as_secs_f64() * 1e3;
     let (mut res, pts) = result(ant, f, &lay, &rep, true, t1);
     // 1° cuts through the maximum
@@ -461,7 +502,7 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
         format!("RP 0 {} 1 1000 0 {} 1 0", n_th, num((az + 180.0) % 360.0)),
     ];
     let t2 = Instant::now();
-    let cut = parse(&run(&deck(ant, &lay, f, &cards)?)?)?;
+    let cut = run_deck(ant, &lay, f, &cards)?;
     let az_cut: Vec<(f64, Gain)> = cut.pattern.iter().take(361).map(|p| (p[1], gain_of(p))).collect();
     let front: Vec<&[f64; 5]> = cut.pattern.iter().skip(361).take(n_th).collect();
     let back: Vec<&[f64; 5]> = cut.pattern.iter().skip(361 + n_th).take(n_th).collect();
@@ -526,6 +567,9 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     }
     if crate::wm::touches_ground(ant) && !crate::wm::has_buried(ant) {
         warnings.push(NEC2_GROUND_CONNECTED.to_string());
+    }
+    if second_medium(ant).is_some() && ant.ground.second.fresnel {
+        warnings.push("NEC-2 takes the second ground at each ray's reflection point; the Fresnel-zone transition needs the wiremom or MININEC engine.".to_string());
     }
     Ok(FullResult {
         result: res.clone(),

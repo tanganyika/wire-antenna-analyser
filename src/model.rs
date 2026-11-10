@@ -158,7 +158,100 @@ pub struct Ground {
     pub sigma_ms: f64,
     /// Extra height added to every wire when a ground is used (m).
     pub add_height: f64,
+    /// A second ground medium (sea, marsh) away from the antenna, far field only.
+    pub second: SecondMedium,
 }
+
+/// A second ground medium beyond a straight boundary or outside a circle, as
+/// NEC-2's GD card: it changes the ground reflection in the far field, not the
+/// currents.  Positions are relative to the origin (before "add height").
+#[derive(Clone, Debug, PartialEq)]
+pub struct SecondMedium {
+    pub enabled: bool,
+    pub eps_r: f64,
+    /// mS/m
+    pub sigma_ms: f64,
+    /// boundary is a circle about the origin (medium 2 outside) instead of a line
+    pub circle: bool,
+    /// distance from the origin to the line, or the circle's radius (m)
+    pub distance: f64,
+    /// direction from the origin square to the line, degrees from +X toward +Y
+    /// (azimuth, as the patterns): medium 2 lies that way
+    pub bearing_deg: f64,
+    /// how far medium 2's surface lies below the primary ground (m)
+    pub drop: f64,
+    /// smooth transition over the first Fresnel zone (wiremom, MININEC) instead of
+    /// the medium at the reflection point (NEC-2)
+    pub fresnel: bool,
+}
+
+impl Default for SecondMedium {
+    fn default() -> Self {
+        SecondMedium { enabled: false, eps_r: 81.0, sigma_ms: 5000.0, circle: false, distance: 30.0, bearing_deg: 0.0, drop: 0.0, fresnel: true }
+    }
+}
+
+impl SecondMedium {
+    /// The wiremom description (None unless enabled).
+    pub fn to_wiremom(&self) -> Option<wiremom::SecondGround> {
+        if !self.enabled {
+            return None;
+        }
+        let boundary = if self.circle {
+            wiremom::Boundary::Circle { radius: self.distance.max(0.0) }
+        } else {
+            wiremom::Boundary::Line { distance: self.distance, azimuth: self.bearing_deg.to_radians() }
+        };
+        let mut g = wiremom::SecondGround::new(wiremom::RealGround { eps_r: self.eps_r, sigma: self.sigma_ms * 1e-3 }, boundary);
+        g.drop = self.drop.max(0.0);
+        g.fresnel = self.fresnel;
+        Some(g)
+    }
+
+    /// One-line form stored in MMANA comments and NEC CM cards.
+    pub fn encode(&self) -> String {
+        format!(
+            "wireant ground2 {} {} {} {} {} {} {}",
+            self.eps_r,
+            self.sigma_ms,
+            if self.circle { "circle" } else { "line" },
+            self.distance,
+            self.bearing_deg,
+            self.drop,
+            if self.fresnel { "fresnel" } else { "specular" }
+        )
+    }
+
+    pub fn decode(line: &str) -> Option<SecondMedium> {
+        let rest = line.trim().strip_prefix("wireant ground2")?;
+        let t: Vec<&str> = rest.split_whitespace().collect();
+        if t.len() < 7 {
+            return None;
+        }
+        let f = |i: usize| t[i].parse::<f64>().ok();
+        Some(SecondMedium {
+            enabled: true,
+            eps_r: f(0)?,
+            sigma_ms: f(1)?,
+            circle: t[2] == "circle",
+            distance: f(3)?,
+            bearing_deg: f(4)?,
+            drop: f(5)?,
+            fresnel: t[6] != "specular",
+        })
+    }
+}
+
+/// Typical ground constants (εr, σ in mS/m), as in NEC/ITU tables.
+pub const GROUND_PRESETS: [(&str, f64, f64); 7] = [
+    ("Sea water", 81.0, 5000.0),
+    ("Fresh water", 80.0, 1.0),
+    ("Very good (pastoral, rich soil)", 20.0, 30.0),
+    ("Average", 13.0, 5.0),
+    ("Poor (rocky, sandy)", 5.0, 1.0),
+    ("Very poor (city, industrial)", 3.0, 1.0),
+    ("Wet ground (ITU)", 30.0, 10.0),
+];
 
 /// Which solver calculates the antenna.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -370,7 +463,7 @@ impl Antenna {
     }
 
     pub fn example(i: usize) -> Antenna {
-        let real = |h: f64| Ground { kind: GroundKind::Real, eps_r: 13.0, sigma_ms: 5.0, add_height: h };
+        let real = |h: f64| Ground { kind: GroundKind::Real, eps_r: 13.0, sigma_ms: 5.0, add_height: h, second: SecondMedium::default() };
         let base = |name: &str, f: f64| Antenna {
             name: name.to_string(),
             freq_mhz: f,
@@ -379,7 +472,7 @@ impl Antenna {
             loads: vec![],
             lines: vec![],
             plates: vec![],
-            ground: Ground { kind: GroundKind::Free, eps_r: 13.0, sigma_ms: 5.0, add_height: 0.0 },
+            ground: Ground { kind: GroundKind::Free, eps_r: 13.0, sigma_ms: 5.0, add_height: 0.0, second: SecondMedium::default() },
             material: Material::CuWire,
             z0: 50.0,
             seg: Segmentation::default(),

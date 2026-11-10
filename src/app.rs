@@ -1465,6 +1465,20 @@ fn pos_pick(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, pos: 
     });
 }
 
+/// A menu of typical ground constants.
+fn ground_preset(ui: &mut egui::Ui, eps_r: &mut f64, sigma_ms: &mut f64) {
+    ui.menu_button("Presets", |ui| {
+        for (name, e, sg) in crate::model::GROUND_PRESETS {
+            if ui.button(format!("{name}  (εr {e}, σ {sg} mS/m)")).clicked() {
+                *eps_r = e;
+                *sigma_ms = sg;
+                ui.close();
+            }
+        }
+        ui.label(egui::RichText::new("Salt marsh varies widely: roughly between very good ground and sea water.").small());
+    });
+}
+
 fn ground_controls(ui: &mut egui::Ui, ant: &mut Antenna) {
     egui::Grid::new(ui.next_auto_id()).spacing([8.0, 6.0]).show(ui, |ui| {
         ui.label("Ground");
@@ -1481,11 +1495,67 @@ fn ground_controls(ui: &mut egui::Ui, ant: &mut Antenna) {
         }
         if ant.ground.kind == GroundKind::Real {
             ui.label("Ground εr");
-            ui.add(egui::DragValue::new(&mut ant.ground.eps_r).speed(0.1).range(1.0..=100.0));
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut ant.ground.eps_r).speed(0.1).range(1.0..=100.0));
+                ground_preset(ui, &mut ant.ground.eps_r, &mut ant.ground.sigma_ms);
+            });
             ui.end_row();
             ui.label("Ground σ (mS/m)");
             ui.add(egui::DragValue::new(&mut ant.ground.sigma_ms).speed(0.1).range(0.0..=10000.0));
             ui.end_row();
+        }
+        if ant.ground.kind != GroundKind::Free {
+            let sm = &mut ant.ground.second;
+            ui.label("Second ground");
+            ui.checkbox(&mut sm.enabled, "sea, marsh or other ground nearby").on_hover_text(
+                "A different ground beyond a boundary, as NEC-2's GD card. It changes the ground reflection in the \
+                 pattern (the currents and impedance still see only the ground under the antenna).",
+            );
+            ui.end_row();
+            if sm.enabled {
+                ui.label("   εr");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut sm.eps_r).speed(0.1).range(1.0..=100.0));
+                    ground_preset(ui, &mut sm.eps_r, &mut sm.sigma_ms);
+                });
+                ui.end_row();
+                ui.label("   σ (mS/m)");
+                ui.add(egui::DragValue::new(&mut sm.sigma_ms).speed(1.0).range(0.0..=10000.0));
+                ui.end_row();
+                ui.label("   Boundary");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut sm.circle, false, "straight line");
+                    ui.radio_value(&mut sm.circle, true, "circle round the origin");
+                });
+                ui.end_row();
+                if sm.circle {
+                    ui.label("   Radius (m)");
+                    ui.add(egui::DragValue::new(&mut sm.distance).speed(0.5).range(0.0..=100000.0)).on_hover_text("The second ground lies outside this circle. 0 = everywhere.");
+                } else {
+                    ui.label("   Distance (m)");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut sm.distance).speed(0.5).range(-100000.0..=100000.0))
+                            .on_hover_text("From the origin to the boundary, measured toward the bearing.");
+                        ui.label("toward bearing");
+                        ui.add(egui::DragValue::new(&mut sm.bearing_deg).speed(1.0).range(0.0..=360.0).suffix("°"))
+                            .on_hover_text("Azimuth (as in the patterns: 0° = +X, 90° = +Y) of the direction in which the second ground lies.");
+                    });
+                }
+                ui.end_row();
+                ui.label("   Drop (m)");
+                ui.add(egui::DragValue::new(&mut sm.drop).speed(0.1).range(0.0..=1000.0)).on_hover_text("How far the second ground's surface lies below the main ground (a cliff or bank).");
+                ui.end_row();
+                ui.label("   Transition");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut sm.fresnel, true, "Fresnel zone").on_hover_text(
+                        "Each ray's reflection is shared between the grounds over its first Fresnel zone, so a shore close to \
+                         the antenna blends in smoothly (wiremom and MININEC engines).",
+                    );
+                    ui.radio_value(&mut sm.fresnel, false, "reflection point (NEC-2)")
+                        .on_hover_text("Each ray uses the ground at its reflection point, as NEC-2 does: the pattern can jump where that point crosses the boundary.");
+                });
+                ui.end_row();
+            }
         }
         ui.label("Wire material");
         egui::ComboBox::from_id_salt(ui.next_auto_id()).selected_text(ant.material.label()).show_ui(ui, |ui| {

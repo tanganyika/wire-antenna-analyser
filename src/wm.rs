@@ -112,6 +112,9 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<(Model, Vec<us
     };
     let mut m = Model::new(wires, ground);
     m.surfaces = surfaces;
+    if grounded {
+        m.second_ground = ant.ground.second.to_wiremom();
+    }
     m.tables = TABLES.clone();
     let mesh = m.mesh().map_err(String::from)?;
     let wire_of = |w: usize, what: &str| index.get(w).copied().flatten().ok_or_else(|| format!("{what} is on wire {}, which has no length or radius", w + 1));
@@ -371,6 +374,54 @@ mod tests {
         assert!((db(0) - db(180)).abs() > 0.5, "{} vs {}", db(0), db(180));
         // ground loss: well under the perfect-ground gain
         assert!(w.result.ga_dbi < 3.0);
+    }
+
+    #[test]
+    fn second_ground_agrees_across_engines() {
+        // ground plane at 28 MHz, sea 15 m away toward 60°: NEC-2's reflection-point
+        // rule in wiremom vs nec2c (rotated deck), and MININEC/wiremom with the
+        // Fresnel zone
+        let mut a = with(4, Engine::Wiremom);
+        a.ground.kind = GroundKind::Real;
+        a.ground.add_height = 5.0;
+        a.ground.second = crate::model::SecondMedium { enabled: true, distance: 15.0, bearing_deg: 60.0, fresnel: false, ..Default::default() };
+        let grid = |e: Engine, fresnel: bool| {
+            let mut b = a.clone();
+            b.engine = e;
+            b.ground.second.fresnel = fresnel;
+            let r = mom::calculate(&b).unwrap();
+            let p = r.patterns;
+            (p.grid, p.grid_els, p.grid_step, r.result)
+        };
+        let (gw, els, step, rw) = grid(Engine::Wiremom, false);
+        let (gn, els_n, step_n, rn) = grid(Engine::Nec2, false);
+        assert_eq!((els.len(), step), (els_n.len(), step_n));
+        let db = |x: f64| 10.0 * x.max(1e-30).log10();
+        let mut worst = 0.0f64;
+        for (i, &el) in els.iter().enumerate() {
+            if el < 3.0 || el > 60.0 {
+                continue;
+            }
+            for j in 0..gw[i].len() {
+                let (x, y) = (db(gw[i][j]), db(gn[i][j]));
+                if y > -10.0 {
+                    worst = worst.max((x - y).abs());
+                }
+            }
+        }
+        println!("sea at 60°: wiremom Ga {:.2} az {} el {} | NEC-2 Ga {:.2} az {} el {} | worst grid difference {worst:.2} dB", rw.ga_dbi, rw.az_max, rw.el_max, rn.ga_dbi, rn.az_max, rn.el_max);
+        assert!(worst < 1.0, "{worst}");
+        // Fresnel-zone mode: MININEC and wiremom share the weighting
+        let (gf, ..) = grid(Engine::Wiremom, true);
+        let (gm, ..) = grid(Engine::Mininec, true);
+        let i15 = els.iter().position(|&e| (e - 15.0).abs() < 1.6).unwrap();
+        let j60 = (60.0 / step).round() as usize;
+        let j240 = (240.0 / step).round() as usize;
+        let fb = |g: &Vec<Vec<f64>>| db(g[i15][j60]) - db(g[i15][j240]);
+        println!("15° el, toward sea minus away: wiremom {:.2} dB, MININEC {:.2} dB, NEC-2 rule {:.2}, nec2c {:.2}", fb(&gf), fb(&gm), fb(&gw), fb(&gn));
+        assert!(fb(&gw) > 1.0 && fb(&gn) > 1.0);
+        assert!(fb(&gf) > 1.0 && fb(&gm) > 1.0);
+        assert!((fb(&gf) - fb(&gm)).abs() < 1.0);
     }
 
     #[test]

@@ -48,6 +48,15 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 - **Ground systems (wiremom engine):** wires may run below z = 0 over real ground.
   Ground rods, buried radials and counterpoises are modelled in full, including
   the ground loss.
+- **Second ground (all engines):** a different ground beyond a straight
+  boundary at any bearing, or outside a circle, optionally lower (a cliff or
+  bank), such as the sea next to a portable station or a salt marsh. As NEC-2's
+  GD card, it changes the ground reflection in the patterns; the currents and
+  impedance see the ground under the antenna. wiremom and MININEC can share each
+  ray's reflection between the grounds over its first Fresnel zone, which matters
+  when the shore is close. NEC-2 (and the "reflection point" option) uses the
+  ground where each ray reflects. The View tab draws the boundary in blue. Ground
+  presets fill in typical εr and σ.
 - **Convenience:** the last folder used for open/save is remembered.
 
 ## Engines compared
@@ -62,6 +71,7 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 | Transmission lines | yes, with loss | no | yes, lossless |
 | Plates | yes | no | no (NEC-2 patches are for closed surfaces) |
 | Steel wire (permeability) | yes | yes | approximated (σ/μr) |
+| Second ground (sea, marsh, cliff) | yes, Fresnel zone or reflection point | yes, Fresnel zone or reflection point | yes, reflection point (GD card) |
 
 On the six built-in examples the three engines agree within 0.07 dB in gain. The
 impedance spread is a few percent, except the Inverted V's reactance, where MININEC
@@ -108,6 +118,14 @@ These are the weaker spots, with how far they have been checked.
   factor becomes the equivalent electrical length. With automatic segmentation,
   NEC-2 gets uniform segments, because it is inaccurate next to the very short
   segments of the MMANA-style taper.
+- **Second ground:** pattern only, as in NEC-2: currents, impedance and ground
+  loss near the antenna come from the main ground, so put the station's own
+  ground (e.g. the salt marsh it stands on) there. The cliff face doesn't reflect
+  or diffract. Circular boundaries smaller than the Fresnel zone are
+  approximate. In NEC-2, a straight boundary at a bearing other than 0° is
+  modelled by turning the antenna, which NEC-2 files can't express: exported
+  decks keep the full description in a `CM wireant ground2` line, and NEC-2
+  itself reads the GD card as a boundary along +X.
 - **Files:** transmission lines in EZNEC files are skipped on import. `.maa` files
   can't hold transmission lines or plates; use `.nec` to keep them.
 - **Wire editor:** changes apply immediately. Press Calculate again for new
