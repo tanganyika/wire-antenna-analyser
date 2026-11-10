@@ -578,7 +578,12 @@ pub struct Radiator {
     ground: Ground,
     lambda: f64,
     gain_const: f64,
+    /// gain computed by another engine instead (az, el in degrees)
+    external: Option<GainFn>,
 }
+
+/// An engine's own gain function: (azimuth, elevation) in degrees -> gain.
+pub type GainFn = std::sync::Arc<dyn Fn(f64, f64) -> Gain + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Gain {
@@ -610,7 +615,7 @@ impl Radiator {
         // FFSolver 0x4093e0 (DAT_00425d40); |r·E| = (ωμ0/4π)·|F⊥|.
         const GAIN_NORM: f64 = 0.033356;
         let gain_const = if sol.p_in > 0.0 { c * c * GAIN_NORM / (2.0 * sol.p_in) } else { 0.0 };
-        Radiator { pos, cur, k: omega / C0, ground: ant.ground.clone(), lambda: C0 / f, gain_const }
+        Radiator { pos, cur, k: omega / C0, ground: ant.ground.clone(), lambda: C0 / f, gain_const, external: None }
     }
 
     /// Radiator from current elements computed elsewhere (another engine): positions
@@ -622,7 +627,13 @@ impl Radiator {
         const GAIN_NORM: f64 = 0.033356;
         let gain_const = if p_in > 0.0 { c * c * GAIN_NORM / (2.0 * p_in) } else { 0.0 };
         let (pos, cur) = elements.into_iter().unzip();
-        Radiator { pos, cur, k: omega / C0, ground: ground.clone(), lambda: C0 / f, gain_const }
+        Radiator { pos, cur, k: omega / C0, ground: ground.clone(), lambda: C0 / f, gain_const, external: None }
+    }
+
+    /// Radiator whose gain comes from another engine's own far-field code.
+    pub fn from_fn(freq_mhz: f64, ground: &Ground, gain: GainFn) -> Radiator {
+        let f = freq_mhz * 1e6;
+        Radiator { pos: vec![], cur: vec![], k: 2.0 * PI * f / C0, ground: ground.clone(), lambda: C0 / f, gain_const: 0.0, external: Some(gain) }
     }
 
     fn sum(&self, r: V3, image: bool) -> [C; 3] {
@@ -639,6 +650,9 @@ impl Radiator {
 
     /// Gain toward azimuth/elevation (degrees). Azimuth 0 = +X, elevation 0 = horizon.
     pub fn gain(&self, az: f64, el: f64) -> Gain {
+        if let Some(f) = &self.external {
+            return f(az, el);
+        }
         let (az, el) = (az.to_radians(), el.to_radians());
         let r = [el.cos() * az.cos(), el.cos() * az.sin(), el.sin()];
         let th = [el.sin() * az.cos(), el.sin() * az.sin(), -el.cos()];
@@ -803,7 +817,7 @@ pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) ->
             return Ok((r, empty_mesh(), sol, None));
         }
         Engine::Wiremom => {
-            let (r, sol, rad, _) = crate::wm::quick(ant, freq_mhz, seg_freq_mhz, need_far)?;
+            let (r, sol, rad, ..) = crate::wm::quick(ant, freq_mhz, seg_freq_mhz, need_far)?;
             return Ok((r, empty_mesh(), sol, rad));
         }
         Engine::Mininec => {}

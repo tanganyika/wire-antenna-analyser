@@ -498,7 +498,7 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     }
     let mesh = mom::build_mesh(ant, ant.lambda())?;
     let mut warnings = mesh.warnings.clone();
-    if crate::wm::touches_ground(ant) {
+    if crate::wm::uses_ground_stand_in(ant) {
         warnings.push(NEC2_GROUND_CONNECTED.to_string());
     }
     Ok(FullResult {
