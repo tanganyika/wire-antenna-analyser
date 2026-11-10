@@ -46,6 +46,7 @@ enum Job {
     Calc(Receiver<Result<FullResult, String>>, Instant),
     Sweep(Receiver<Result<SweepResult, String>>, Instant),
     Opt(Receiver<optimize::Msg>, Instant),
+    Resonance(Receiver<Result<crate::tools::ResonanceReport, String>>, Instant),
 }
 
 pub struct Shot {
@@ -88,6 +89,7 @@ pub struct App {
     wire_edit: Option<usize>,
     /// antenna before each drawing change (Ctrl+Z in the View)
     undo: Vec<Antenna>,
+    tools: crate::tools::ToolsState,
     edit_anchor: u8,
     edit_move_joined: bool,
     az_cursor: Option<f64>,
@@ -165,6 +167,7 @@ impl App {
             selected_wire: None,
             wire_edit: None,
             undo: Vec::new(),
+            tools: crate::tools::ToolsState::default(),
             edit_anchor: 0,
             edit_move_joined: true,
             az_cursor: None,
@@ -425,6 +428,19 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Empty) => self.job = Some(Job::Sweep(rx, t)),
                 Err(_) => self.status = "Sweep stopped.".into(),
             },
+            Job::Resonance(rx, t) => match rx.try_recv() {
+                Ok(Ok(r)) => {
+                    self.status = format!("Found {} resonance(s) in {:.0} ms.", r.resonances.len(), t.elapsed().as_secs_f64() * 1e3);
+                    self.tools.sel = 0;
+                    self.tools.report = Some(r);
+                }
+                Ok(Err(e)) => {
+                    self.error = Some(e);
+                    self.status = "Resonance search failed.".into();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => self.job = Some(Job::Resonance(rx, t)),
+                Err(_) => self.status = "Resonance search stopped.".into(),
+            },
             Job::Opt(rx, t) => {
                 let mut finished = false;
                 loop {
@@ -509,6 +525,21 @@ impl App {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+            ui.menu_button("Tools", |ui| {
+                if ui.button("Resonance finder…").clicked() {
+                    if self.tools.res_f0 <= 0.0 || self.tools.res_f1 <= self.tools.res_f0 {
+                        self.tools.res_f0 = (self.ant.freq_mhz * 0.85 * 1000.0).round() / 1000.0;
+                        self.tools.res_f1 = (self.ant.freq_mhz * 1.15 * 1000.0).round() / 1000.0;
+                    }
+                    self.tools.res_open = true;
+                    ui.close();
+                }
+                if ui.button("Match calculator…").clicked() {
+                    self.fill_match_from_last();
+                    self.tools.match_open = true;
+                    ui.close();
+                }
+            });
             ui.menu_button("Help", |ui| {
                 ui.label("Wire antenna analyser for Linux.");
                 ui.label("Method-of-moments solver running on all processor cores.");
@@ -519,6 +550,54 @@ impl App {
                 ui.selectable_value(&mut self.tab, t, t.label());
             }
         });
+    }
+
+    /// The match calculator's load from the last calculation, if there is one.
+    fn fill_match_from_last(&mut self) {
+        if let Some(c) = &self.calc {
+            self.tools.m_f = c.result.freq_mhz;
+            self.tools.m_r = c.result.z.re;
+            self.tools.m_x = c.result.z.im;
+        }
+        self.tools.m_z0 = self.ant.z0;
+    }
+
+    fn tool_windows(&mut self, ctx: &egui::Context) {
+        let busy = self.busy();
+        let mut acts = crate::tools::resonance_window(ctx, &mut self.tools, self.ant.z0, busy);
+        acts.extend(crate::tools::match_window(ctx, &mut self.tools, self.calc.is_some()));
+        for a in acts {
+            match a {
+                crate::tools::ToolAction::FindResonances => {
+                    if self.busy() {
+                        continue;
+                    }
+                    let (tx, rx) = channel();
+                    let a = self.ant.clone();
+                    let (f0, f1, n, lim, th) = (self.tools.res_f0, self.tools.res_f1, self.tools.res_steps, self.tools.res_limit, self.threads);
+                    let c2 = ctx.clone();
+                    std::thread::spawn(move || {
+                        let r = pool(th).install(|| crate::tools::find(&a, f0, f1, n, lim));
+                        let _ = tx.send(r);
+                        c2.request_repaint();
+                    });
+                    self.job = Some(Job::Resonance(rx, Instant::now()));
+                    self.status = format!("Searching {f0}–{f1} MHz for resonances on {} threads…", self.threads);
+                }
+                crate::tools::ToolAction::SetFreq(f) => {
+                    self.ant.freq_mhz = (f * 1e5).round() / 1e5;
+                    self.status = format!("Frequency set to {:.5} MHz.", self.ant.freq_mhz);
+                }
+                crate::tools::ToolAction::MatchAt(f, z) => {
+                    self.tools.m_f = f;
+                    self.tools.m_r = z.re;
+                    self.tools.m_x = z.im;
+                    self.tools.m_z0 = self.ant.z0;
+                    self.tools.match_open = true;
+                }
+                crate::tools::ToolAction::UseLast => self.fill_match_from_last(),
+            }
+        }
     }
 
     fn save_as(&mut self) {
@@ -1726,6 +1805,7 @@ impl eframe::App for App {
                 ui.label(&self.status);
             });
         });
+        self.tool_windows(&ctx);
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Geometry => self.geometry(ui),
             Tab::View => self.view_tab(ui),

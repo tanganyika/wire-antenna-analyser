@@ -8,6 +8,7 @@ mod wm;
 mod ez;
 mod optimize;
 mod plots;
+mod tools;
 
 use std::path::PathBuf;
 

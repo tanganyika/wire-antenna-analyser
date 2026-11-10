@@ -68,6 +68,25 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
   when the shore is close. NEC-2 (and the "reflection point" option) uses the
   ground where each ray reflects. The View tab draws the boundary in blue. Ground
   presets fill in typical εr and σ.
+- **Tools menu:**
+  - **Resonance finder:** sweeps a range on all cores, finds every reactance
+    zero, and refines each with a few extra solves. For each resonance it shows
+    the type (series or parallel), R, SWR, the SWR bandwidth against the
+    reference impedance, the bandwidth once matched to its own resistance, and Q
+    (f·|dZ/df| / 2R). Plots of SWR and R/jX are included. "Use frequency" sets
+    the working frequency; "Match…" opens the match calculator with that
+    impedance.
+  - **Match calculator:** for an impedance (typed in, from the last
+    calculation, or from a resonance) and a target (default 50 Ω):
+    - every L network (L and C, series or shunt first), with values, marked as
+      low-pass or high-pass;
+    - a gamma match: rod length and series capacitor, from element and rod
+      diameters and spacing (the ARRL Antenna Book transmission-line model;
+      approximate, so check by modelling the rod);
+    - coax sections: a Regier series section of a chosen impedance (75, 93,
+      35 Ω, …), or a length of feeder to a real-impedance point plus a
+      quarter-wave transformer, as electrical degrees and metres at a velocity
+      factor.
 - **Convenience:** the last folder used for open/save is remembered.
 
 ## Engines compared
