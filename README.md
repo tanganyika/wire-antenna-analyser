@@ -31,6 +31,17 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
       fixed, end points, radius, segments, insulation; joined wires follow);
     - scroll bars and right-drag move the view;
     - scale bar;
+    - **Draw wires** mode:
+      - *New wire*: drag to draw a wire; starting on a wire end joins it there.
+        Release opens the wire editor so the exact length can be typed in.
+      - *Adjust*: drag a wire end to change the length along the wire, or with
+        Shift to move the end freely. Wire ends joined there follow. Drag a wire
+        to move it.
+      - Wires are drawn in the plane facing you (or a fixed XY, XZ or YZ
+        plane) through the point the drag starts from, or through the origin.
+        Ends snap to other wire ends and to a chosen grid.
+      - A live readout shows the length and coordinates. Ctrl+drag rotates the
+        view, and Undo (Ctrl+Z) reverses drawing changes;
   - Calculate;
   - Far field plots (movable gain marker);
   - 3D pattern (ARRL / dB / linear);

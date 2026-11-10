@@ -86,6 +86,8 @@ pub struct App {
     /// wire open in the wire editor (right-click in the View), and which point stays
     /// put when its length is typed in (0 start, 1 centre, 2 end)
     wire_edit: Option<usize>,
+    /// antenna before each drawing change (Ctrl+Z in the View)
+    undo: Vec<Antenna>,
     edit_anchor: u8,
     edit_move_joined: bool,
     az_cursor: Option<f64>,
@@ -162,6 +164,7 @@ impl App {
             frame: 0,
             selected_wire: None,
             wire_edit: None,
+            undo: Vec::new(),
             edit_anchor: 0,
             edit_move_joined: true,
             az_cursor: None,
@@ -1100,8 +1103,7 @@ impl App {
                 self.view.pan = Vec2::ZERO;
             }
             if ui.button("Whole antenna").clicked() {
-                let keep = (self.view.show_segments, self.view.show_current, self.view.show_labels);
-                self.view = ViewState { show_segments: keep.0, show_current: keep.1, show_labels: keep.2, ..ViewState::default() };
+                self.view.reset();
             }
             if self.view.focus.is_some() {
                 ui.label(RichText::new(format!("zoom ×{:.0}", self.view.zoom)).color(Color32::from_rgb(235, 140, 0)));
@@ -1112,13 +1114,51 @@ impl App {
             ui.label(RichText::new("● source").color(Color32::from_rgb(220, 30, 30)));
             ui.label(RichText::new("■ load").color(Color32::from_rgb(20, 160, 60)));
         });
+        ui.horizontal(|ui| {
+            let was = self.view.draw;
+            ui.toggle_value(&mut self.view.draw, "✏ Draw wires").on_hover_text(
+                "New wire: drag to draw one (start on a wire end to join it). Adjust: drag a wire end to change its length \
+                 (Shift: move the end freely), drag a wire to move it. Ctrl+drag rotates the view; the wire editor opens \
+                 after each new wire so you can type its length.",
+            );
+            if was != self.view.draw {
+                self.view.focus = None;
+            }
+            if self.view.draw {
+                ui.radio_value(&mut self.view.adding, true, "New wire");
+                ui.radio_value(&mut self.view.adding, false, "Adjust");
+                ui.separator();
+                ui.label("in plane");
+                egui::ComboBox::from_id_salt("draw_plane").selected_text(self.view.plane.label()).show_ui(ui, |ui| {
+                    for p in [plots::DrawPlane::Auto, plots::DrawPlane::XY, plots::DrawPlane::XZ, plots::DrawPlane::YZ] {
+                        ui.selectable_value(&mut self.view.plane, p, p.label());
+                    }
+                });
+                ui.label("grid");
+                egui::ComboBox::from_id_salt("draw_snap")
+                    .selected_text(if self.view.snap > 0.0 { format!("{} m", self.view.snap) } else { "off".into() })
+                    .show_ui(ui, |ui| {
+                        for v in [0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0] {
+                            ui.selectable_value(&mut self.view.snap, v, if v > 0.0 { format!("{v} m") } else { "off".into() });
+                        }
+                    });
+                ui.label(RichText::new("ends snap to other wire ends").small().color(Color32::GRAY));
+            }
+            let undo = ui.add_enabled(!self.undo.is_empty(), egui::Button::new("↶ Undo")).on_hover_text("Undo the last drawing change (Ctrl+Z)");
+            if undo.clicked() || (!self.undo.is_empty() && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z))) {
+                if let Some(a) = self.undo.pop() {
+                    self.ant = a;
+                    self.wire_edit = None;
+                }
+            }
+        });
         // the view with scroll bars to move it left/right and up/down
         let avail = ui.available_size();
         let bar = 16.0;
         let view_size = Vec2::new((avail.x - bar - 6.0).max(100.0), (avail.y - bar - 6.0).max(100.0));
-        let mut edit = None;
+        let mut edits = Vec::new();
         ui.horizontal(|ui| {
-            edit = plots::view3d(ui, view_size, &self.ant, self.calc.as_ref(), &mut self.view);
+            edits = plots::view3d(ui, view_size, &self.ant, self.calc.as_ref(), &mut self.view);
             let r = scroll_range(view_size.y, self.view.zoom, self.view.pan.y);
             ui.spacing_mut().slider_width = view_size.y;
             ui.add(
@@ -1146,10 +1186,55 @@ impl App {
         {
             self.view.pan.x = -x;
         }
-        if let Some(w) = edit {
-            self.wire_edit = Some(w);
-        }
+        self.apply_view_edits(edits);
         self.wire_editor(ui.ctx());
+    }
+
+    fn apply_view_edits(&mut self, edits: Vec<plots::ViewEdit>) {
+        use plots::ViewEdit;
+        for e in edits {
+            match e {
+                ViewEdit::Edit(w) => self.wire_edit = Some(w),
+                ViewEdit::Begin => {
+                    self.undo.push(self.ant.clone());
+                    if self.undo.len() > 100 {
+                        self.undo.remove(0);
+                    }
+                }
+                ViewEdit::SetEnds(ends, p) => {
+                    for (w, second) in ends {
+                        if let Some(w) = self.ant.wires.get_mut(w) {
+                            if second {
+                                w.p2 = p;
+                            } else {
+                                w.p1 = p;
+                            }
+                        }
+                    }
+                }
+                ViewEdit::SetWire(i, a, b) => {
+                    if let Some(w) = self.ant.wires.get_mut(i) {
+                        w.p1 = a;
+                        w.p2 = b;
+                    }
+                }
+                ViewEdit::AddWire(a, b) => {
+                    // the radius of the wire it starts from, else of the last wire
+                    let r = self
+                        .ant
+                        .wires
+                        .iter()
+                        .find(|w| w.p1 == a || w.p2 == a)
+                        .or(self.ant.wires.last())
+                        .map(|w| w.r.abs())
+                        .unwrap_or(0.001);
+                    self.ant.wires.push(Wire::new(a, b, r));
+                    // open it so its length can be typed in
+                    self.wire_edit = Some(self.ant.wires.len() - 1);
+                    self.status = format!("Added wire {} ({:.3} m)", self.ant.wires.len(), self.ant.wires.last().unwrap().length());
+                }
+            }
+        }
     }
 
     /// Remove wire `i` with its sources, loads and transmission lines, renumbering the rest.

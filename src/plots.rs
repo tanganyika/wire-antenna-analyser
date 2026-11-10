@@ -363,12 +363,108 @@ pub struct ViewState {
     pub show_labels: bool,
     /// Point the 3D view is centred on after clicking part of the antenna (None = whole antenna).
     pub focus: Option<[f64; 3]>,
+    /// Drawing mode: drag to add wires, drag ends to change length, drag a wire to move it.
+    pub draw: bool,
+    /// adding wires, or adjusting (lengths, moving) existing ones
+    pub adding: bool,
+    pub plane: DrawPlane,
+    /// grid step for drawing (m); 0 = no grid snap
+    pub snap: f64,
+    /// the view's centre and size, frozen while drawing so the view holds still
+    frame: Option<([f64; 3], f64)>,
+    drag: Option<Drag>,
 }
 
 impl Default for ViewState {
     fn default() -> Self {
-        ViewState { yaw: -0.6, pitch: 0.45, zoom: 1.0, pan: Vec2::ZERO, show_segments: true, show_current: true, show_labels: true, focus: None }
+        ViewState {
+            yaw: -0.6,
+            pitch: 0.45,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            show_segments: true,
+            show_current: true,
+            show_labels: true,
+            focus: None,
+            draw: false,
+            adding: true,
+            plane: DrawPlane::Auto,
+            snap: 0.1,
+            frame: None,
+            drag: None,
+        }
     }
+}
+
+impl ViewState {
+    /// Settings kept when the view is reset.
+    pub fn reset(&mut self) {
+        *self = ViewState {
+            show_segments: self.show_segments,
+            show_current: self.show_current,
+            show_labels: self.show_labels,
+            draw: self.draw,
+            adding: self.adding,
+            plane: self.plane,
+            snap: self.snap,
+            ..ViewState::default()
+        };
+    }
+}
+
+/// The plane new wires are drawn in (through the point the drag starts from).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DrawPlane {
+    /// the one facing the viewer most
+    Auto,
+    XY,
+    XZ,
+    YZ,
+}
+
+impl DrawPlane {
+    pub fn label(&self) -> &'static str {
+        match self {
+            DrawPlane::Auto => "facing you",
+            DrawPlane::XY => "XY (horizontal)",
+            DrawPlane::XZ => "XZ (vertical, front)",
+            DrawPlane::YZ => "YZ (vertical, side)",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum DragKind {
+    /// a new wire from `start`
+    New { start: [f64; 3] },
+    /// wire ends at `ends` (wire, second end?) all at one point, the first being the
+    /// grabbed wire; `fixed` is that wire's other end
+    End { ends: Vec<(usize, bool)>, fixed: [f64; 3] },
+    /// a whole wire, grabbed at `grab`, from where it was
+    Move { wire: usize, grab: [f64; 3], p1: [f64; 3], p2: [f64; 3] },
+}
+
+#[derive(Clone, Debug)]
+struct Drag {
+    kind: DragKind,
+    /// plane axis (0 = x, 1 = y, 2 = z) and its value, in antenna coordinates
+    axis: usize,
+    value: f64,
+    /// current point (antenna coordinates)
+    cur: [f64; 3],
+}
+
+/// Edits the View asks for (antenna coordinates, before "add height").
+#[derive(Clone, Debug)]
+pub enum ViewEdit {
+    /// right-clicked wire: open its editor
+    Edit(usize),
+    /// a drag starts changing the antenna (take an undo snapshot)
+    Begin,
+    /// move these wire ends to a point
+    SetEnds(Vec<(usize, bool)>, [f64; 3]),
+    SetWire(usize, [f64; 3], [f64; 3]),
+    AddWire([f64; 3], [f64; 3]),
 }
 
 fn heat(t: f32) -> Color32 {
@@ -380,12 +476,14 @@ fn heat(t: f32) -> Color32 {
 }
 
 /// The 3D view.  Returns the wire that was right-clicked, if any (to edit it).
-pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullResult>, st: &mut ViewState) -> Option<usize> {
+pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullResult>, st: &mut ViewState) -> Vec<ViewEdit> {
+    let mut edits = Vec::new();
     let (resp, painter) = ui.allocate_painter(size, Sense::click_and_drag());
     let rect = resp.rect;
     painter.rect_filled(rect, 4.0, Color32::from_rgb(246, 248, 252));
     painter.rect_stroke(rect, 4.0, Stroke::new(1.0, GRID), StrokeKind::Inside);
-    if resp.dragged_by(egui::PointerButton::Primary) {
+    let ctrl = ui.input(|i| i.modifiers.command);
+    if resp.dragged_by(egui::PointerButton::Primary) && (!st.draw || (ctrl && st.drag.is_none())) {
         let d = resp.drag_delta();
         st.yaw += d.x * 0.01;
         st.pitch = (st.pitch + d.y * 0.01).clamp(-1.55, 1.55);
@@ -393,14 +491,16 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
     if resp.dragged_by(egui::PointerButton::Secondary) || resp.dragged_by(egui::PointerButton::Middle) {
         st.pan += resp.drag_delta();
     }
-    if resp.double_clicked() {
-        *st = ViewState { show_segments: st.show_segments, show_current: st.show_current, show_labels: st.show_labels, ..Default::default() };
+    if resp.double_clicked() && !st.draw {
+        st.reset();
     }
     let dz = if ant.ground.kind != GroundKind::Free { ant.ground.add_height } else { 0.0 };
     let pts: Vec<[f64; 3]> = ant.wires.iter().flat_map(|w| [w.p1, w.p2]).map(|p| [p[0], p[1], p[2] + dz]).collect();
     if pts.is_empty() {
-        painter.text(rect.center(), Align2::CENTER_CENTER, "No wires", FontId::proportional(14.0), Color32::GRAY);
-        return None;
+        if !st.draw {
+            painter.text(rect.center(), Align2::CENTER_CENTER, "No wires", FontId::proportional(14.0), Color32::GRAY);
+            return edits;
+        }
     }
     let mut lo = [f64::MAX; 3];
     let mut hi = [f64::MIN; 3];
@@ -413,8 +513,21 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
     if dz != 0.0 || ant.ground.kind != GroundKind::Free {
         lo[2] = lo[2].min(0.0);
     }
-    let ctr = st.focus.unwrap_or([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0]);
-    let ext = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt().max(1e-3);
+    if pts.is_empty() {
+        // drawing into an empty antenna: a 20 m space round the origin
+        lo = [-10.0, -10.0, 0.0];
+        hi = [10.0, 10.0, 10.0];
+    }
+    let mut ctr = st.focus.unwrap_or([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0]);
+    let mut ext = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt().max(1e-3);
+    // while drawing, the view keeps the frame it had, so it doesn't jump as wires change
+    if st.draw {
+        let f = *st.frame.get_or_insert((ctr, ext));
+        ctr = f.0;
+        ext = f.1;
+    } else {
+        st.frame = None;
+    }
     let sc = (size.x.min(size.y) * 0.8) as f64 / ext * st.zoom as f64;
     let (cy, sy, cp, sp) = (st.yaw.cos() as f64, st.yaw.sin() as f64, st.pitch.cos() as f64, st.pitch.sin() as f64);
     let origin = rect.center() + st.pan;
@@ -446,7 +559,10 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
         best
     };
     let hover = resp.hover_pos().and_then(|m| pick(m)).filter(|h| h.2 < 14.0);
-    if resp.clicked() && !ui.input(|i| i.modifiers.shift) {
+    if st.draw {
+        draw_input(ui, &resp, ant, dz, ctr, sc, origin, (cy, sy, cp, sp), &proj, st, &mut edits);
+    }
+    if resp.clicked() && !ui.input(|i| i.modifiers.shift) && !st.draw {
         if let Some((_, p, d)) = resp.interact_pointer_pos().and_then(|m| pick(m)) {
             if d < 25.0 {
                 st.focus = Some(p);
@@ -460,6 +576,9 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
     let mut edit = None;
     if resp.secondary_clicked() {
         edit = resp.interact_pointer_pos().and_then(|m| pick(m)).filter(|h| h.2 < 14.0).map(|h| h.0);
+        if let Some(w) = edit {
+            edits.push(ViewEdit::Edit(w));
+        }
     }
     if (resp.secondary_clicked() && edit.is_none()) || (resp.clicked() && ui.input(|i| i.modifiers.shift)) {
         st.zoom = (st.zoom / 3.0).max(0.1);
@@ -622,7 +741,10 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
             painter.circle_stroke(p, 7.0, Stroke::new(1.0, Color32::from_rgb(220, 30, 30)));
         }
     }
-    if let Some((i, _, _)) = hover {
+    if st.draw {
+        draw_overlay(&painter, rect, ant, dz, &proj, st, resp.hover_pos());
+    }
+    if let (Some((i, _, _)), false) = (hover, st.draw && st.drag.is_some()) {
         let w = &ant.wires[i];
         let (a, b) = wire_world(w);
         painter.line_segment([proj(a), proj(b)], Stroke::new(5.0, Color32::from_rgba_unmultiplied(235, 140, 0, 140)));
@@ -643,7 +765,13 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
         if !loads.is_empty() {
             txt += &format!("\n{}", loads.join(", "));
         }
-        txt += "\nclick: zoom in here   right-click: edit this wire";
+        txt += if st.draw && st.adding {
+            "\ndrag from an end: new wire from there   right-click: edit"
+        } else if st.draw {
+            "\ndrag an end: change length (Shift: move it freely)   drag the wire: move it   right-click: edit"
+        } else {
+            "\nclick: zoom in here   right-click: edit this wire"
+        };
         painter.text(rect.left_top() + Vec2::new(10.0, 8.0), Align2::LEFT_TOP, txt, FontId::proportional(12.0), INK);
     }
     // scale bar
@@ -660,7 +788,13 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
         let label = if len_m >= 1.0 { format!("{} m", len_m) } else if len_m >= 0.01 { format!("{} cm", (len_m * 100.0 * 1000.0).round() / 1000.0) } else { format!("{} mm", (len_m * 1000.0 * 1000.0).round() / 1000.0) };
         painter.text(Pos2::new(x0 + px / 2.0, y - 6.0), Align2::CENTER_BOTTOM, label, FontId::proportional(11.0), INK);
     }
-    let hint = "click a wire: zoom in there   right-click a wire: edit it   right-click elsewhere: zoom out   drag: rotate   right-drag or scroll bars: move   wheel: zoom at mouse   double-click: whole antenna";
+    let hint = if st.draw && st.adding {
+        "NEW WIRE: drag to draw (from a wire end to join it)   Ctrl+drag: rotate   right-drag: move view   right-click a wire: edit   Ctrl+Z: undo"
+    } else if st.draw {
+        "ADJUST: drag an end: length (Shift: move freely)   drag a wire: move it   Ctrl+drag: rotate   right-drag: move view   right-click a wire: edit   Ctrl+Z: undo"
+    } else {
+        "click a wire: zoom in there   right-click a wire: edit it   right-click elsewhere: zoom out   drag: rotate   right-drag or scroll bars: move   wheel: zoom at mouse   double-click: whole antenna"
+    };
     painter.text(rect.left_bottom() + Vec2::new(8.0, -6.0), Align2::LEFT_BOTTOM, hint, FontId::proportional(10.0), Color32::GRAY);
     if imax > 0.0 {
         let x = rect.right() - 130.0;
@@ -671,7 +805,255 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
         }
         painter.text(Pos2::new(x, y - 10.0), Align2::LEFT_BOTTOM, "current: low → high", FontId::proportional(10.0), Color32::DARK_GRAY);
     }
-    edit
+    let _ = edit;
+    edits
+}
+
+// ------------------------------------------------------------------ drawing
+
+const SNAP_PX: f32 = 10.0;
+const DRAW: Color32 = Color32::from_rgb(235, 120, 0);
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+fn dist3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    dot3(sub3(a, b), sub3(a, b)).sqrt()
+}
+
+/// All wire ends (antenna coordinates) as (wire, second end?, point).
+fn wire_ends(ant: &Antenna) -> Vec<(usize, bool, [f64; 3])> {
+    ant.wires.iter().enumerate().flat_map(|(i, w)| [(i, false, w.p1), (i, true, w.p2)]).collect()
+}
+
+/// The wire end nearest the mouse within SNAP_PX.
+fn end_near(ant: &Antenna, dz: f64, proj: &dyn Fn([f64; 3]) -> Pos2, m: Pos2) -> Option<(usize, bool, [f64; 3])> {
+    wire_ends(ant)
+        .into_iter()
+        .map(|(i, e, p)| (i, e, p, (proj([p[0], p[1], p[2] + dz]) - m).length()))
+        .filter(|x| x.3 < SNAP_PX)
+        .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap())
+        .map(|(i, e, p, _)| (i, e, p))
+}
+
+fn snap_grid(v: f64, step: f64) -> f64 {
+    if step > 0.0 { (v / step).round() * step } else { v }
+}
+
+/// Mouse position -> the view ray in antenna coordinates: (point, direction).
+#[allow(clippy::too_many_arguments)]
+fn view_ray(m: Pos2, origin: Pos2, ctr: [f64; 3], sc: f64, dz: f64, rot: (f64, f64, f64, f64)) -> ([f64; 3], [f64; 3]) {
+    let (cy, sy, cp, sp) = rot;
+    let x1 = (m.x - origin.x) as f64 / sc;
+    let a = -((m.y - origin.y) as f64) / sc;
+    let (z0, y10) = (a * cp, -a * sp);
+    let base = [ctr[0] + x1 * cy + y10 * sy, ctr[1] - x1 * sy + y10 * cy, ctr[2] + z0 - dz];
+    let dir = [cp * sy, cp * cy, sp];
+    (base, dir)
+}
+
+/// Where the view ray meets the plane `axis` = `value`.
+fn on_plane(ray: ([f64; 3], [f64; 3]), axis: usize, value: f64) -> Option<[f64; 3]> {
+    let (b, d) = ray;
+    if d[axis].abs() < 0.03 {
+        return None;
+    }
+    let t = (value - b[axis]) / d[axis];
+    Some([b[0] + t * d[0], b[1] + t * d[1], b[2] + t * d[2]])
+}
+
+fn plane_axis(plane: DrawPlane, dir: [f64; 3]) -> usize {
+    match plane {
+        DrawPlane::XY => 2,
+        DrawPlane::XZ => 1,
+        DrawPlane::YZ => 0,
+        DrawPlane::Auto => (0..3).max_by(|&a, &b| dir[a].abs().partial_cmp(&dir[b].abs()).unwrap()).unwrap(),
+    }
+}
+
+/// A point in the drawing plane under the mouse: a nearby wire end, else the plane
+/// point with its in-plane coordinates on the grid.
+fn plane_point(ant: &Antenna, dz: f64, proj: &dyn Fn([f64; 3]) -> Pos2, m: Pos2, ray: ([f64; 3], [f64; 3]), axis: usize, value: f64, snap: f64, skip: &[(usize, bool)]) -> Option<[f64; 3]> {
+    if let Some((i, e, p)) = end_near(ant, dz, proj, m) {
+        if !skip.contains(&(i, e)) {
+            return Some(p);
+        }
+    }
+    let mut p = on_plane(ray, axis, value)?;
+    for (k, v) in p.iter_mut().enumerate() {
+        if k != axis {
+            *v = snap_grid(*v, snap);
+        }
+    }
+    Some(p)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_input(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    ant: &Antenna,
+    dz: f64,
+    ctr: [f64; 3],
+    sc: f64,
+    origin: Pos2,
+    rot: (f64, f64, f64, f64),
+    proj: &dyn Fn([f64; 3]) -> Pos2,
+    st: &mut ViewState,
+    edits: &mut Vec<ViewEdit>,
+) {
+    let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+    let Some(m) = resp.interact_pointer_pos().or(resp.hover_pos()) else { return };
+    let ray = view_ray(m, origin, ctr, sc, dz, rot);
+    if resp.drag_started_by(egui::PointerButton::Primary) && !ctrl {
+        // decide from where the button went down (the drag is only recognised once
+        // the mouse has moved a few pixels)
+        let m = ui.input(|i| i.pointer.press_origin()).unwrap_or(m);
+        let ray = view_ray(m, origin, ctr, sc, dz, rot);
+        let axis = plane_axis(st.plane, ray.1);
+        if st.adding {
+            // a new wire, from a wire end or the plane through the origin
+            if let Some((_, _, p)) = end_near(ant, dz, proj, m) {
+                st.drag = Some(Drag { kind: DragKind::New { start: p }, axis, value: p[axis], cur: p });
+            } else if let Some(p) = plane_point(ant, dz, proj, m, ray, axis, 0.0, st.snap, &[]) {
+                st.drag = Some(Drag { kind: DragKind::New { start: p }, axis, value: 0.0, cur: p });
+            }
+        } else if let Some((i, e, p)) = end_near(ant, dz, proj, m) {
+            // an end: change the length (Shift: move it freely); ends joined there follow
+            let at: Vec<(usize, bool)> = wire_ends(ant).into_iter().filter(|x| dist3(x.2, p) < 1e-6).map(|x| (x.0, x.1)).collect();
+            let mut ends = vec![(i, e)];
+            ends.extend(at.into_iter().filter(|x| *x != (i, e)));
+            let w = &ant.wires[i];
+            let fixed = if e { w.p1 } else { w.p2 };
+            st.drag = Some(Drag { kind: DragKind::End { ends, fixed }, axis, value: p[axis], cur: p });
+            edits.push(ViewEdit::Begin);
+        } else if let Some((i, p)) = wire_body_near(ant, dz, proj, m) {
+            let w = &ant.wires[i];
+            st.drag = Some(Drag { kind: DragKind::Move { wire: i, grab: p, p1: w.p1, p2: w.p2 }, axis, value: p[axis], cur: p });
+            edits.push(ViewEdit::Begin);
+        }
+    }
+    let Some(mut d) = st.drag.clone() else { return };
+    if resp.dragged_by(egui::PointerButton::Primary) {
+        match &d.kind {
+            DragKind::New { .. } => {
+                if let Some(p) = plane_point(ant, dz, proj, m, ray, d.axis, d.value, st.snap, &[]) {
+                    d.cur = p;
+                }
+            }
+            DragKind::End { ends, fixed } => {
+                let p = if shift {
+                    plane_point(ant, dz, proj, m, ray, d.axis, d.value, st.snap, ends)
+                } else {
+                    // along the wire: the point of its line nearest the view ray, with
+                    // the length on the grid
+                    let u = sub3(d.cur, *fixed);
+                    let l = dot3(u, u).sqrt();
+                    if l < 1e-12 {
+                        None
+                    } else {
+                        let u = u.map(|v| v / l);
+                        let (b, dir) = ray;
+                        let w0 = sub3(*fixed, b);
+                        let (bb, dd, ee) = (dot3(u, dir), dot3(u, w0), dot3(dir, w0));
+                        let den = 1.0 - bb * bb;
+                        (den > 1e-6).then(|| {
+                            let s = (bb * ee - dd) / den;
+                            let s = snap_grid(s, st.snap).max(st.snap.max(1e-3));
+                            [fixed[0] + s * u[0], fixed[1] + s * u[1], fixed[2] + s * u[2]]
+                        })
+                    }
+                };
+                if let Some(p) = p {
+                    d.cur = p;
+                    edits.push(ViewEdit::SetEnds(ends.clone(), p));
+                }
+            }
+            DragKind::Move { wire, grab, p1, p2 } => {
+                if let Some(p) = on_plane(ray, d.axis, d.value) {
+                    let mut dv = sub3(p, *grab);
+                    for (k, v) in dv.iter_mut().enumerate() {
+                        *v = if k == d.axis { 0.0 } else { snap_grid(*v, st.snap) };
+                    }
+                    d.cur = p;
+                    let add = |q: [f64; 3]| [q[0] + dv[0], q[1] + dv[1], q[2] + dv[2]];
+                    edits.push(ViewEdit::SetWire(*wire, add(*p1), add(*p2)));
+                }
+            }
+        }
+        st.drag = Some(d.clone());
+        ui.ctx().request_repaint();
+    }
+    if resp.drag_stopped() {
+        if let DragKind::New { start } = d.kind {
+            if dist3(start, d.cur) > 1e-6 {
+                edits.push(ViewEdit::Begin);
+                edits.push(ViewEdit::AddWire(start, d.cur));
+            }
+        }
+        st.drag = None;
+    }
+}
+
+/// The wire whose body (away from its ends) is under the mouse, and the point.
+fn wire_body_near(ant: &Antenna, dz: f64, proj: &dyn Fn([f64; 3]) -> Pos2, m: Pos2) -> Option<(usize, [f64; 3])> {
+    let mut best: Option<(usize, [f64; 3], f32)> = None;
+    for (i, w) in ant.wires.iter().enumerate() {
+        let (a, b) = ([w.p1[0], w.p1[1], w.p1[2] + dz], [w.p2[0], w.p2[1], w.p2[2] + dz]);
+        let (pa, pb) = (proj(a), proj(b));
+        let ab = pb - pa;
+        let l2 = ab.length_sq();
+        if l2 < 1.0 {
+            continue;
+        }
+        let t = ((m - pa).dot(ab) / l2).clamp(0.0, 1.0);
+        let dpx = (pa + ab * t - m).length();
+        if dpx < 6.0 && best.map(|bb| dpx < bb.2).unwrap_or(true) {
+            let tw = t as f64;
+            best = Some((i, [w.p1[0] + (w.p2[0] - w.p1[0]) * tw, w.p1[1] + (w.p2[1] - w.p1[1]) * tw, w.p1[2] + (w.p2[2] - w.p1[2]) * tw], dpx));
+        }
+    }
+    best.map(|b| (b.0, b.1))
+}
+
+fn draw_overlay(painter: &egui::Painter, rect: Rect, ant: &Antenna, dz: f64, proj: &dyn Fn([f64; 3]) -> Pos2, st: &ViewState, mouse: Option<Pos2>) {
+    let w3 = |p: [f64; 3]| proj([p[0], p[1], p[2] + dz]);
+    // wire ends you can grab
+    for (_, _, p) in wire_ends(ant) {
+        painter.circle_stroke(w3(p), 3.0, Stroke::new(1.0, DRAW));
+    }
+    if let (Some(m), None) = (mouse, &st.drag) {
+        if let Some((_, _, p)) = end_near(ant, dz, proj, m) {
+            painter.circle_stroke(w3(p), SNAP_PX, Stroke::new(1.5, DRAW));
+        }
+    }
+    let Some(d) = &st.drag else {
+        painter.text(rect.right_top() + Vec2::new(-10.0, 8.0), Align2::RIGHT_TOP, if st.adding { "drawing: new wire" } else { "drawing: adjust" }, FontId::proportional(13.0), DRAW);
+        return;
+    };
+    let fmt = |p: [f64; 3]| format!("({:.3}, {:.3}, {:.3})", p[0], p[1], p[2]);
+    let (a, b, what) = match &d.kind {
+        DragKind::New { start } => (*start, d.cur, "new wire"),
+        DragKind::End { ends, fixed } => {
+            let w = &ant.wires[ends[0].0];
+            (*fixed, if ends[0].1 { w.p2 } else { w.p1 }, "wire end")
+        }
+        DragKind::Move { wire, .. } => {
+            let w = &ant.wires[*wire];
+            (w.p1, w.p2, "move wire")
+        }
+    };
+    painter.line_segment([w3(a), w3(b)], Stroke::new(3.0, DRAW));
+    painter.circle_filled(w3(b), 4.0, DRAW);
+    let txt = format!("{what}: length {:.3} m\n{} → {}", dist3(a, b), fmt(a), fmt(b));
+    let at = w3(b) + Vec2::new(12.0, -12.0);
+    let galley = painter.layout_no_wrap(txt, FontId::proportional(12.0), INK);
+    let r = Rect::from_min_size(at - Vec2::new(0.0, galley.size().y), galley.size()).expand(4.0);
+    painter.rect_filled(r, 3.0, Color32::from_rgba_unmultiplied(255, 255, 255, 230));
+    painter.galley(r.min + Vec2::splat(4.0), galley, INK);
 }
 
 // ------------------------------------------------------------------ 3D pattern
@@ -852,5 +1234,43 @@ mod tests {
         assert_eq!(step_min_db(-15.0, false), -20.0);
         assert_eq!(step_min_db(-5.0, false), -6.0);
         assert_eq!(step_min_db(-95.0, false), -100.0);
+    }
+}
+
+#[cfg(test)]
+mod draw_tests {
+    use super::*;
+
+    #[test]
+    fn view_ray_inverts_the_projection() {
+        // the projection of view3d, for a few view angles; the ray through a
+        // projected point's screen position must pass through the point
+        for (yaw, pitch) in [(-0.6f64, 0.45f64), (0.0, 1.5), (0.0, 0.0), (-1.57, 0.0), (2.0, -0.8)] {
+            let (cy, sy, cp, sp) = (yaw.cos(), yaw.sin(), pitch.cos(), pitch.sin());
+            let (ctr, sc, dz, origin) = ([1.0, -2.0, 3.0], 37.0, 0.5, Pos2::new(400.0, 300.0));
+            let proj = |p: [f64; 3]| -> Pos2 {
+                let (x, y, z) = (p[0] - ctr[0], p[1] - ctr[1], p[2] - ctr[2]);
+                let x1 = x * cy - y * sy;
+                let y1 = x * sy + y * cy;
+                origin + Vec2::new((x1 * sc) as f32, (-(z * cp - y1 * sp) * sc) as f32)
+            };
+            let p = [2.5, 4.0, 7.0]; // antenna coordinates; world z = 7.5
+            let (b, d) = view_ray(proj([p[0], p[1], p[2] + dz]), origin, ctr, sc, dz, (cy, sy, cp, sp));
+            let w = sub3(p, b);
+            let t = dot3(w, d);
+            let miss = dist3(p, [b[0] + t * d[0], b[1] + t * d[1], b[2] + t * d[2]]);
+            assert!(miss < 1e-4, "yaw {yaw} pitch {pitch}: {miss}");
+            // and the plane through the point gives the point back
+            let axis = plane_axis(DrawPlane::Auto, d);
+            if let Some(q) = on_plane((b, d), axis, p[axis]) {
+                assert!(dist3(p, q) < 1e-3, "{q:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn grid_snap() {
+        assert_eq!(snap_grid(1.234, 0.1), 1.2000000000000002);
+        assert_eq!(snap_grid(1.234, 0.0), 1.234);
     }
 }
