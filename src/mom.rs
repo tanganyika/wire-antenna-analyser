@@ -961,6 +961,7 @@ mod tests {
     #[test]
     fn dipole_free_space() {
         let mut a = Antenna::example(0);
+        a.engine = Engine::Mininec;
         a.material = Material::Lossless;
         let r = calculate(&a).unwrap().result;
         println!("dipole Z={:.2} ga={:.2} n={}", r.z, r.ga_dbi, r.n_unknowns);
@@ -971,6 +972,7 @@ mod tests {
     #[test]
     fn dipole_uniform() {
         let mut a = Antenna::example(0);
+        a.engine = Engine::Mininec;
         a.material = Material::Lossless;
         a.wires[0].seg = 21;
         let r = calculate(&a).unwrap().result;
@@ -980,6 +982,7 @@ mod tests {
     #[test]
     fn monopole() {
         let mut a = Antenna::example(3);
+        a.engine = Engine::Mininec;
         a.material = Material::Lossless;
         let r = calculate(&a).unwrap().result;
         println!("monopole Z={:.2} ga={:.2} el={}", r.z, r.ga_dbi, r.el_max);
@@ -990,7 +993,8 @@ mod tests {
     #[test]
     fn yagi_and_others() {
         for i in 0..6 {
-            let a = Antenna::example(i);
+            let mut a = Antenna::example(i);
+        a.engine = Engine::Mininec;
             let r = calculate(&a).unwrap().result;
             println!("{}: Z={:.2} swr={:.2} ga={:.2} fb={:.2} el={:.1} az={:.1} n={} t={:.1}ms", a.name, r.z, r.swr, r.ga_dbi, r.fb_db, r.el_max, r.az_max, r.n_unknowns, r.t_total_ms);
         }
@@ -1004,6 +1008,7 @@ mod conv {
     fn convergence() {
         for n in [11, 21, 41, 81, 161, 321] {
             let mut a = Antenna::example(0);
+        a.engine = Engine::Mininec;
             a.material = Material::Lossless;
             a.wires[0].seg = n;
             let (r, ..) = quick(&a, a.freq_mhz, a.freq_mhz, false).unwrap();
@@ -1019,6 +1024,7 @@ mod conv2 {
     fn halfwave_thin() {
         for (n, arel) in [(41, 1e-5), (81, 1e-5), (81, 1e-4), (81,1e-3)] {
             let mut a = Antenna::example(0);
+        a.engine = Engine::Mininec;
             a.material = Material::Lossless;
             let lam = a.lambda();
             a.wires[0] = Wire { p1: [0.0, -lam / 4.0, 0.0], p2: [0.0, lam / 4.0, 0.0], r: arel * lam, seg: n, ins_t: 0.0, ins_eps: 1.0 };
@@ -1034,6 +1040,7 @@ mod fb_range {
     #[test]
     fn rear_range_changes_fb() {
         let mut a = Antenna::example(5);
+        a.engine = Engine::Mininec;
         for (az, el) in [(0.0, 0.0), (120.0, 60.0), (180.0, 90.0)] {
             a.fb_az = az;
             a.fb_el = el;

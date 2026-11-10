@@ -556,6 +556,7 @@ mod tests {
         }
         for i in 0..6 {
             let mut a = Antenna::example(i);
+            a.engine = Engine::Mininec;
             let m = mom::calculate(&a).unwrap().result;
             a.engine = Engine::Nec2;
             let n = calculate(&a).unwrap().result;

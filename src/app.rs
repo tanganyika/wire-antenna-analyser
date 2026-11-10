@@ -83,6 +83,11 @@ pub struct App {
     shot: Option<Shot>,
     frame: u64,
     selected_wire: Option<usize>,
+    /// wire open in the wire editor (right-click in the View), and which point stays
+    /// put when its length is typed in (0 start, 1 centre, 2 end)
+    wire_edit: Option<usize>,
+    edit_anchor: u8,
+    edit_move_joined: bool,
     az_cursor: Option<f64>,
     el_cursor: Option<f64>,
     view3d_pat: ViewState,
@@ -156,6 +161,9 @@ impl App {
             shot: shot.map(|p| Shot { path: p, requested: false, done: Arc::new(AtomicBool::new(false)) }),
             frame: 0,
             selected_wire: None,
+            wire_edit: None,
+            edit_anchor: 0,
+            edit_move_joined: true,
             az_cursor: None,
             el_cursor: Some(5.0),
             view3d_pat: ViewState::default(),
@@ -169,6 +177,7 @@ impl App {
         match std::env::var("WIREANT_ENGINE").map(|v| v.to_ascii_lowercase()).as_deref() {
             Ok("nec") if crate::nec::available() => app.ant.engine = Engine::Nec2,
             Ok("wiremom") => app.ant.engine = Engine::Wiremom,
+            Ok("mininec") => app.ant.engine = Engine::Mininec,
             _ => {}
         }
         if let Some(p) = open {
@@ -620,16 +629,7 @@ impl App {
                 }
             });
             if let Some(i) = delete {
-                self.ant.wires.remove(i);
-                self.ant.sources.retain(|s| s.wire != i);
-                self.ant.loads.retain(|l| l.wire != i);
-                for s in self.ant.sources.iter_mut() {
-                    if s.wire > i { s.wire -= 1; }
-                }
-                for l in self.ant.loads.iter_mut() {
-                    if l.wire > i { l.wire -= 1; }
-                }
-                self.selected_wire = None;
+                self.delete_wire(i);
             }
             let nw = self.ant.wires.len().max(1);
             ui.add_space(8.0);
@@ -1112,8 +1112,189 @@ impl App {
             ui.label(RichText::new("● source").color(Color32::from_rgb(220, 30, 30)));
             ui.label(RichText::new("■ load").color(Color32::from_rgb(20, 160, 60)));
         });
+        // the view with scroll bars to move it left/right and up/down
         let avail = ui.available_size();
-        plots::view3d(ui, avail, &self.ant, self.calc.as_ref(), &mut self.view);
+        let bar = 16.0;
+        let view_size = Vec2::new((avail.x - bar - 6.0).max(100.0), (avail.y - bar - 6.0).max(100.0));
+        let mut edit = None;
+        ui.horizontal(|ui| {
+            edit = plots::view3d(ui, view_size, &self.ant, self.calc.as_ref(), &mut self.view);
+            let r = scroll_range(view_size.y, self.view.zoom, self.view.pan.y);
+            ui.spacing_mut().slider_width = view_size.y;
+            ui.add(
+                egui::Slider::new(&mut self.view.pan.y, -r..=r)
+                    .vertical()
+                    .show_value(false)
+                    .clamping(egui::SliderClamping::Never)
+                    .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 2.5 }),
+            )
+            .on_hover_text("Move the view up or down");
+        });
+        let r = scroll_range(view_size.x, self.view.zoom, self.view.pan.x);
+        // scrolling right shows what is to the right: the scene moves left
+        let mut x = -self.view.pan.x;
+        ui.spacing_mut().slider_width = view_size.x;
+        if ui
+            .add(
+                egui::Slider::new(&mut x, -r..=r)
+                    .show_value(false)
+                    .clamping(egui::SliderClamping::Never)
+                    .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 2.5 }),
+            )
+            .on_hover_text("Move the view left or right")
+            .changed()
+        {
+            self.view.pan.x = -x;
+        }
+        if let Some(w) = edit {
+            self.wire_edit = Some(w);
+        }
+        self.wire_editor(ui.ctx());
+    }
+
+    /// Remove wire `i` with its sources, loads and transmission lines, renumbering the rest.
+    fn delete_wire(&mut self, i: usize) {
+        self.ant.wires.remove(i);
+        self.ant.sources.retain(|s| s.wire != i);
+        self.ant.loads.retain(|l| l.wire != i);
+        self.ant.lines.retain(|t| t.a_wire != i && t.b_wire != i);
+        let shift = |w: &mut usize| {
+            if *w > i {
+                *w -= 1;
+            }
+        };
+        for s in self.ant.sources.iter_mut() {
+            shift(&mut s.wire);
+        }
+        for l in self.ant.loads.iter_mut() {
+            shift(&mut l.wire);
+        }
+        for t in self.ant.lines.iter_mut() {
+            shift(&mut t.a_wire);
+            shift(&mut t.b_wire);
+        }
+        self.selected_wire = None;
+    }
+
+    /// The wire editor window (opened by right-clicking a wire in the View).
+    fn wire_editor(&mut self, ctx: &egui::Context) {
+        let Some(i) = self.wire_edit else { return };
+        if i >= self.ant.wires.len() {
+            self.wire_edit = None;
+            return;
+        }
+        let mut open = true;
+        let mut delete = false;
+        let old = (self.ant.wires[i].p1, self.ant.wires[i].p2);
+        egui::Window::new(format!("Wire {}", i + 1)).id(egui::Id::new("wire_editor")).open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
+            let w = &mut self.ant.wires[i];
+            egui::Grid::new("we_grid").num_columns(4).spacing([8.0, 6.0]).show(ui, |ui| {
+                ui.label("");
+                for h in ["X (m)", "Y (m)", "Z (m)"] {
+                    ui.label(RichText::new(h).strong());
+                }
+                ui.end_row();
+                for (name, p) in [("Start", &mut w.p1), ("End", &mut w.p2)] {
+                    ui.label(name);
+                    for c in p.iter_mut() {
+                        ui.add(egui::DragValue::new(c).speed(0.01).max_decimals(4));
+                    }
+                    ui.end_row();
+                }
+            });
+            ui.add_space(4.0);
+            let changed_len = ui
+                .horizontal(|ui| {
+                    ui.label("Length (m)");
+                    let mut len = w.length();
+                    let changed = ui.add(egui::DragValue::new(&mut len).speed(0.01).range(1e-4..=1e6).max_decimals(4)).changed();
+                    ui.label("  keep");
+                    ui.selectable_value(&mut self.edit_anchor, 0, "start");
+                    ui.selectable_value(&mut self.edit_anchor, 1, "centre");
+                    ui.selectable_value(&mut self.edit_anchor, 2, "end");
+                    changed.then_some(len)
+                })
+                .inner;
+            ui.add_space(4.0);
+            egui::Grid::new("we_grid2").num_columns(3).spacing([8.0, 6.0]).show(ui, |ui| {
+                if let Some(len) = changed_len.filter(|_| w.length() > 0.0) {
+                    let d = [0, 1, 2].map(|k| (w.p2[k] - w.p1[k]) / w.length());
+                    let (a, b) = match self.edit_anchor {
+                        0 => (w.p1, [0, 1, 2].map(|k| w.p1[k] + d[k] * len)),
+                        2 => ([0, 1, 2].map(|k| w.p2[k] - d[k] * len), w.p2),
+                        _ => {
+                            let c = [0, 1, 2].map(|k| (w.p1[k] + w.p2[k]) / 2.0);
+                            ([0, 1, 2].map(|k| c[k] - d[k] * len / 2.0), [0, 1, 2].map(|k| c[k] + d[k] * len / 2.0))
+                        }
+                    };
+                    w.p1 = a;
+                    w.p2 = b;
+                }
+                ui.label("Radius (mm)");
+                let mut rmm = w.r * 1000.0;
+                if ui.add(egui::DragValue::new(&mut rmm).speed(0.01).range(0.001..=1000.0).max_decimals(3)).changed() {
+                    w.r = rmm / 1000.0;
+                }
+                ui.end_row();
+                ui.label("Segments");
+                ui.horizontal(|ui| {
+                    let mut auto = w.seg <= 0;
+                    if ui.checkbox(&mut auto, "auto").changed() {
+                        w.seg = if auto { -1 } else { 21 };
+                    }
+                    if !auto {
+                        ui.add(egui::DragValue::new(&mut w.seg).speed(0.2).range(1..=2000));
+                    }
+                });
+                ui.end_row();
+                ui.label("Insulation (mm)");
+                let mut tmm = w.ins_t * 1000.0;
+                if ui.add(egui::DragValue::new(&mut tmm).speed(0.01).range(0.0..=100.0).max_decimals(3)).changed() {
+                    w.ins_t = tmm / 1000.0;
+                }
+                ui.horizontal(|ui| {
+                    ui.label("εr");
+                    ui.add(egui::DragValue::new(&mut w.ins_eps).speed(0.01).range(1.0..=20.0).max_decimals(2));
+                });
+                ui.end_row();
+            });
+            ui.checkbox(&mut self.edit_move_joined, "Move the ends of wires joined to this one")
+                .on_hover_text("When an end moves, the wires connected there follow it, so junctions stay connected");
+            ui.label(RichText::new(format!("{} — changes apply immediately; Calculate again for new results.", pos_label(i, 0.5))).weak());
+            ui.horizontal(|ui| {
+                if ui.button("🗑 Delete wire").clicked() {
+                    delete = true;
+                }
+                if ui.button("Close").clicked() {
+                    self.wire_edit = None;
+                }
+            });
+        });
+        let new = (self.ant.wires[i].p1, self.ant.wires[i].p2);
+        if self.edit_move_joined && new != old {
+            let same = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-6);
+            for (j, w) in self.ant.wires.iter_mut().enumerate() {
+                if j == i {
+                    continue;
+                }
+                for (o, n) in [(old.0, new.0), (old.1, new.1)] {
+                    if o != n {
+                        if same(w.p1, o) {
+                            w.p1 = n;
+                        }
+                        if same(w.p2, o) {
+                            w.p2 = n;
+                        }
+                    }
+                }
+            }
+        }
+        if delete {
+            self.delete_wire(i);
+            self.wire_edit = None;
+        } else if !open {
+            self.wire_edit = None;
+        }
     }
 
     fn optimizer_tab(&mut self, ui: &mut egui::Ui) {
@@ -1244,8 +1425,8 @@ fn status_line(r: &CalcResult) -> String {
 
 fn engine_pick(ui: &mut egui::Ui, id: &str, e: &mut Engine) {
     egui::ComboBox::from_id_salt(id).selected_text(e.label()).show_ui(ui, |ui| {
-        ui.selectable_value(e, Engine::Mininec, Engine::Mininec.label());
         ui.selectable_value(e, Engine::Wiremom, Engine::Wiremom.label());
+        ui.selectable_value(e, Engine::Mininec, Engine::Mininec.label());
         if crate::nec::available() {
             ui.selectable_value(e, Engine::Nec2, Engine::Nec2.label());
         } else {
@@ -1253,7 +1434,7 @@ fn engine_pick(ui: &mut egui::Ui, id: &str, e: &mut Engine) {
         }
     })
     .response
-    .on_hover_text("MININEC: the original's method, real ground only in the far field.\nwiremom: built-in MPIE solver (triangle currents, Galerkin) with Sommerfeld real ground, multi-threaded in-process.\nNEC-2: public-domain NEC-2 (nec2c) with Sommerfeld-Norton real ground; each calculation runs as its own process, sweeps run many at once.");
+    .on_hover_text("wiremom (default): built-in MPIE solver (triangle currents, Galerkin) with Sommerfeld real ground, wires in the ground, transmission lines and plates; multi-threaded in-process.\nMININEC: the original's method, real ground only in the far field.\nNEC-2: public-domain NEC-2 (nec2c) with Sommerfeld-Norton real ground; each calculation runs as its own process, sweeps run many at once.");
 }
 
 fn wire_pick(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, wire: &mut usize, n: usize) {
@@ -1412,4 +1593,10 @@ impl eframe::App for App {
             }
         }
     }
+}
+
+/// Range for a view scroll bar: a few view widths at the current zoom, always
+/// including where the view is now.
+fn scroll_range(extent: f32, zoom: f32, pan: f32) -> f32 {
+    (extent * zoom.max(1.0) * 1.5).max(pan.abs() * 1.2).max(50.0)
 }

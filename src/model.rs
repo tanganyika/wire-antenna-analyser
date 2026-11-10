@@ -388,7 +388,7 @@ impl Antenna {
             fb_el: 60.0,
             user_rho: 1.72e-8,
             user_mu: 1.0,
-            engine: Engine::Mininec,
+            engine: Engine::Wiremom,
         };
         let src = |w| Source { wire: w, pos: 0.5, phase_deg: 0.0, volts: 1.0 };
         match i {

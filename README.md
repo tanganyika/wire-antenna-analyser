@@ -10,17 +10,97 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 
 ## Features
 
-- **Three engines**
-  - built-in multi-threaded MININEC-style solver (the method MMANA uses)
-  - built-in multi-threaded **wiremom** solver ([wiremom](https://github.com/tanganyika/wiremom)): MPIE with triangle currents and Galerkin testing, perfect or Sommerfeld real ground, all in-process; sweeps share Sommerfeld tables
-  - bundled public-domain NEC-2 (`nec2c`) with Sommerfeld-Norton real ground; sweeps run many NEC-2 processes in parallel
-- **Files:** open and save MMANA `.maa` (English and Russian headings), NEC `.nec` (including 4nec2 `SY` symbols, helices, arcs, GM/GR/GX), and EZNEC `.ez`
-- **Tabs:** Geometry, 3D view (click a wire to zoom in, scale bar), Calculate, Far field plots (movable gain marker), 3D pattern (ARRL / dB / linear), Frequency sweep, Optimizer
-- **Modelling:** wire materials, lumped loads (R+jX, L/C/Q traps, series/parallel RLC), wire insulation (velocity factor), free / perfect / real ground, F/B rear range
-- **Transmission lines (wiremom and NEC-2 engines):** feed lines, phasing lines and stubs between any two places on wires, with impedance, length, velocity factor, loss and reversal; read from and written to NEC files (`TL` cards)
-- **Plates (wiremom engine):** flat conducting plates (reflectors, ground screens, car-body panels) meshed into triangles; a wire ending on a plate connects to it, so a monopole can be fed against a plate; read from and written to NEC files (`SM`/`SC` cards)
-- **Ground systems (wiremom engine):** wires may run below z = 0 over real ground — ground rods, buried radials and counterpoises are modelled in full, including the ground loss
-- **Convenience:** the last folder used for open/save is remembered
+- **Three engines** (choose under Calculate → Engine; see [Engines compared](#engines-compared))
+  - **wiremom** (default): built-in, multi-threaded, in-process
+    ([wiremom](https://github.com/tanganyika/wiremom)). It uses MPIE with
+    triangle currents and Galerkin testing, perfect or Sommerfeld real ground,
+    wires in the ground, transmission lines and plates. Sweeps share Sommerfeld
+    tables.
+  - **MININEC-style** solver: the method MMANA uses. Real ground only affects the
+    far field.
+  - **NEC-2**: bundled public-domain `nec2c` with Sommerfeld-Norton real ground.
+    Sweeps run many NEC-2 processes in parallel.
+- **Files:** open and save MMANA `.maa` (English and Russian headings), NEC `.nec`
+  (including 4nec2 `SY` symbols, helices, arcs, GM/GR/GX, `TL` lines and `SM`/`SC`
+  plates), and EZNEC `.ez`.
+- **Tabs:**
+  - Geometry;
+  - View:
+    - click a wire to zoom in;
+    - right-click a wire to edit it (length with the start, centre or end kept
+      fixed, end points, radius, segments, insulation; joined wires follow);
+    - scroll bars and right-drag move the view;
+    - scale bar;
+  - Calculate;
+  - Far field plots (movable gain marker);
+  - 3D pattern (ARRL / dB / linear);
+  - Frequency sweep;
+  - Optimizer.
+- **Modelling:** wire materials, lumped loads (R+jX, L/C/Q traps, series/parallel
+  RLC), wire insulation (velocity factor), free / perfect / real ground, F/B rear
+  range.
+- **Transmission lines (wiremom and NEC-2 engines):** feed lines, phasing lines and
+  stubs between any two places on wires. Each has an impedance, length, velocity
+  factor, loss and reversal.
+- **Plates (wiremom engine):** flat conducting plates (reflectors, ground screens,
+  car-body panels) meshed into triangles. A wire ending on a plate connects to it,
+  so a monopole can be fed against a plate.
+- **Ground systems (wiremom engine):** wires may run below z = 0 over real ground.
+  Ground rods, buried radials and counterpoises are modelled in full, including
+  the ground loss.
+- **Convenience:** the last folder used for open/save is remembered.
+
+## Engines compared
+
+| | wiremom (default) | MININEC | NEC-2 |
+|---|---|---|---|
+| Method | MPIE, triangle currents, Galerkin | MININEC pulses | NEC-2 EFIE (nec2c) |
+| Runs | in-process, all cores | in-process, all cores | one process per calculation |
+| Real ground in the currents and impedance | Sommerfeld | no (perfect ground; real ground only in the pattern) | Sommerfeld-Norton |
+| Wires in or through the ground | yes | no | no |
+| Wires stopping on real ground | stand-in over perfect ground (warned) | same | not reliable (warned) |
+| Transmission lines | yes, with loss | no | yes, lossless |
+| Plates | yes | no | no (NEC-2 patches are for closed surfaces) |
+| Steel wire (permeability) | yes | yes | approximated (σ/μr) |
+
+On the six built-in examples the three engines agree within 0.07 dB in gain. The
+impedance spread is a few percent, except the Inverted V's reactance, where MININEC
+differs from the other two.
+
+## Known limitations
+
+These are the weaker spots, with how far they have been checked.
+
+- **Wire-to-plate junctions (monopole fed against a plate):** nothing independent
+  confirms the exact impedance.
+  - The plate model converges smoothly as the mesh is refined: 39.9 Ω for a λ/4
+    monopole on a 1 λ square plate, in line with published values for that size
+    of ground plane.
+  - Energy is conserved.
+  - An equivalent wire-grid model differs by up to about 8%, approaching the
+    plate result as the grid gets finer. (Wire grids themselves are known to be
+    unreliable at a feed junction.)
+- **Wires in the ground:** no other program available here can model them.
+  nec2c can't: it gives a meaningless 259 − j232 Ω for a vertical connected to
+  average ground. The engine is checked against exact limits and a classic
+  ground-rod formula (Dwight, within 0.7%), not against measurements or NEC-4.
+- **Wires that stop on the surface of real ground** with nothing below it (no rod
+  or radials) use a perfect-ground stand-in for the currents. A point contact into
+  lossy earth can't be modelled. The warning suggests adding a rod or radials.
+- **Speed with buried wires:** the air-to-ground couplings are computed directly,
+  not tabulated. A vertical with 8 buried radials takes about 1.4 s per frequency,
+  so sweeps of such models are slow.
+- **Plates:** flat parallelograms only, above the ground (not in it). Large
+  plates grow the problem quickly; a 1 m plate at 144 MHz is fine, but meshes of
+  thousands of triangles take seconds.
+- **NEC-2 engine:** plates are refused. Line loss is ignored, and a velocity
+  factor becomes the equivalent electrical length. With automatic segmentation,
+  NEC-2 gets uniform segments, because it is inaccurate next to the very short
+  segments of the MMANA-style taper.
+- **Files:** transmission lines in EZNEC files are skipped on import. `.maa` files
+  can't hold transmission lines or plates; use `.nec` to keep them.
+- **Wire editor:** changes apply immediately. Press Calculate again for new
+  results; the old results stay on screen until you do.
 
 ## Install on Linux
 

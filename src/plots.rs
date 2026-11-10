@@ -379,7 +379,8 @@ fn heat(t: f32) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullResult>, st: &mut ViewState) {
+/// The 3D view.  Returns the wire that was right-clicked, if any (to edit it).
+pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullResult>, st: &mut ViewState) -> Option<usize> {
     let (resp, painter) = ui.allocate_painter(size, Sense::click_and_drag());
     let rect = resp.rect;
     painter.rect_filled(rect, 4.0, Color32::from_rgb(246, 248, 252));
@@ -399,7 +400,7 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
     let pts: Vec<[f64; 3]> = ant.wires.iter().flat_map(|w| [w.p1, w.p2]).map(|p| [p[0], p[1], p[2] + dz]).collect();
     if pts.is_empty() {
         painter.text(rect.center(), Align2::CENTER_CENTER, "No wires", FontId::proportional(14.0), Color32::GRAY);
-        return;
+        return None;
     }
     let mut lo = [f64::MAX; 3];
     let mut hi = [f64::MIN; 3];
@@ -455,7 +456,12 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
             }
         }
     }
-    if resp.secondary_clicked() || (resp.clicked() && ui.input(|i| i.modifiers.shift)) {
+    // right-click on a wire: edit it; elsewhere (or shift-click): zoom out
+    let mut edit = None;
+    if resp.secondary_clicked() {
+        edit = resp.interact_pointer_pos().and_then(|m| pick(m)).filter(|h| h.2 < 14.0).map(|h| h.0);
+    }
+    if (resp.secondary_clicked() && edit.is_none()) || (resp.clicked() && ui.input(|i| i.modifiers.shift)) {
         st.zoom = (st.zoom / 3.0).max(0.1);
         if st.zoom <= 1.0 {
             st.focus = None;
@@ -605,7 +611,7 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
         if !loads.is_empty() {
             txt += &format!("\n{}", loads.join(", "));
         }
-        txt += "\nclick: zoom in here   right-click: zoom out";
+        txt += "\nclick: zoom in here   right-click: edit this wire";
         painter.text(rect.left_top() + Vec2::new(10.0, 8.0), Align2::LEFT_TOP, txt, FontId::proportional(12.0), INK);
     }
     // scale bar
@@ -622,7 +628,7 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
         let label = if len_m >= 1.0 { format!("{} m", len_m) } else if len_m >= 0.01 { format!("{} cm", (len_m * 100.0 * 1000.0).round() / 1000.0) } else { format!("{} mm", (len_m * 1000.0 * 1000.0).round() / 1000.0) };
         painter.text(Pos2::new(x0 + px / 2.0, y - 6.0), Align2::CENTER_BOTTOM, label, FontId::proportional(11.0), INK);
     }
-    let hint = "click a wire: zoom in there   right-click: zoom out   drag: rotate   right-drag: move   wheel: zoom at mouse   double-click: whole antenna";
+    let hint = "click a wire: zoom in there   right-click a wire: edit it   right-click elsewhere: zoom out   drag: rotate   right-drag or scroll bars: move   wheel: zoom at mouse   double-click: whole antenna";
     painter.text(rect.left_bottom() + Vec2::new(8.0, -6.0), Align2::LEFT_BOTTOM, hint, FontId::proportional(10.0), Color32::GRAY);
     if imax > 0.0 {
         let x = rect.right() - 130.0;
@@ -633,6 +639,7 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
         }
         painter.text(Pos2::new(x, y - 10.0), Align2::LEFT_BOTTOM, "current: low → high", FontId::proportional(10.0), Color32::DARK_GRAY);
     }
+    edit
 }
 
 // ------------------------------------------------------------------ 3D pattern
