@@ -613,6 +613,18 @@ impl Radiator {
         Radiator { pos, cur, k: omega / C0, ground: ant.ground.clone(), lambda: C0 / f, gain_const }
     }
 
+    /// Radiator from current elements computed elsewhere (another engine): positions
+    /// and current moments I·dl (A·m), the frequency, and the input power ½Re(V·I*).
+    pub fn from_elements(elements: Vec<(V3, [C; 3])>, freq_mhz: f64, ground: &Ground, p_in: f64) -> Radiator {
+        let f = freq_mhz * 1e6;
+        let omega = 2.0 * PI * f;
+        let c = omega * MU0 / (4.0 * PI);
+        const GAIN_NORM: f64 = 0.033356;
+        let gain_const = if p_in > 0.0 { c * c * GAIN_NORM / (2.0 * p_in) } else { 0.0 };
+        let (pos, cur) = elements.into_iter().unzip();
+        Radiator { pos, cur, k: omega / C0, ground: ground.clone(), lambda: C0 / f, gain_const }
+    }
+
     fn sum(&self, r: V3, image: bool) -> [C; 3] {
         let mut s = [C::new(0.0, 0.0); 3];
         for (p, c) in self.pos.iter().zip(self.cur.iter()) {
@@ -779,33 +791,48 @@ pub fn rear_max(r: &Radiator, az: f64, el: f64, az_w: f64, el_w: f64) -> Gain {
         .reduce(Gain::default, |x, y| if y.total > x.total { y } else { x })
 }
 
+pub fn empty_mesh() -> Mesh {
+    Mesh { segs: vec![], bases: vec![], wire_gaps: vec![], wire_segs: vec![], warnings: vec![], image: false }
+}
+
 pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) -> Result<(CalcResult, Mesh, Solution, Option<Radiator>), String> {
-    if ant.engine == Engine::Nec2 {
-        let r = crate::nec::quick(ant, freq_mhz, seg_freq_mhz, need_far)?;
-        let mesh = Mesh { segs: vec![], bases: vec![], wire_gaps: vec![], wire_segs: vec![], warnings: vec![], image: false };
-        let sol = Solution { freq_mhz, currents: vec![], z_in: vec![r.z], p_in: 0.0, n_unknowns: r.n_unknowns, n_segs: r.n_segs, t_fill_ms: 0.0, t_solve_ms: r.t_solve_ms };
-        return Ok((r, mesh, sol, None));
+    match ant.engine {
+        Engine::Nec2 => {
+            let r = crate::nec::quick(ant, freq_mhz, seg_freq_mhz, need_far)?;
+            let sol = Solution { freq_mhz, currents: vec![], z_in: vec![r.z], p_in: 0.0, n_unknowns: r.n_unknowns, n_segs: r.n_segs, t_fill_ms: 0.0, t_solve_ms: r.t_solve_ms };
+            return Ok((r, empty_mesh(), sol, None));
+        }
+        Engine::Wiremom => {
+            let (r, sol, rad, _) = crate::wm::quick(ant, freq_mhz, seg_freq_mhz, need_far)?;
+            return Ok((r, empty_mesh(), sol, rad));
+        }
+        Engine::Mininec => {}
     }
     let t0 = Instant::now();
     let mesh = build_mesh(ant, 299.792458 / seg_freq_mhz)?;
     let sol = solve(ant, &mesh, freq_mhz)?;
+    let rad = need_far.then(|| Radiator::new(ant, &mesh, &sol));
+    let res = summarize(ant, freq_mhz, t0, &sol, rad.as_ref());
+    Ok((res, mesh, sol, rad))
+}
+
+/// CalcResult for a solved antenna: impedance, SWR and (with a radiator) the gain
+/// maximum and F/B.  `t0` is when the calculation started.
+pub fn summarize(ant: &Antenna, freq_mhz: f64, t0: Instant, sol: &Solution, rad: Option<&Radiator>) -> CalcResult {
     let z = sol.z_in[0];
     let t2 = Instant::now();
     let (mut ga, mut fb, mut az, mut el, mut hp) = (f64::NAN, f64::NAN, 0.0, 0.0, true);
-    let mut rad = None;
-    if need_far {
-        let r = Radiator::new(ant, &mesh, &sol);
+    if let Some(r) = rad {
         let (a, e, g) = r.find_max();
-        let back = rear_max(&r, a, e, ant.fb_az, ant.fb_el);
+        let back = rear_max(r, a, e, ant.fb_az, ant.fb_el);
         ga = db(g.total);
         fb = db(g.total) - db(back.total);
         az = a;
         el = e;
         hp = g.hor >= g.ver;
-        rad = Some(r);
     }
     let t_far = t2.elapsed().as_secs_f64() * 1e3;
-    let res = CalcResult {
+    CalcResult {
         freq_mhz,
         z,
         swr: swr(z, ant.z0),
@@ -824,17 +851,24 @@ pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) ->
         t_fill_ms: sol.t_fill_ms,
         t_solve_ms: sol.t_solve_ms,
         t_far_ms: t_far,
-    };
-    Ok((res, mesh, sol, rad))
+    }
 }
 
 pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
-    if ant.engine == Engine::Nec2 {
-        return crate::nec::calculate(ant);
+    match ant.engine {
+        Engine::Nec2 => return crate::nec::calculate(ant),
+        Engine::Wiremom => return crate::wm::calculate(ant),
+        Engine::Mininec => {}
     }
     let (mut res, mesh, sol, rad) = quick(ant, ant.freq_mhz, ant.freq_mhz, true)?;
+    let patterns = patterns(ant, &mut res, &rad.unwrap());
+    let warnings = mesh.warnings.clone();
+    Ok(FullResult { result: res, patterns, currents: sol.currents, mesh, warnings, seg_currents: None })
+}
+
+/// Pattern cuts through the maximum and the 3D grid; adds the time taken to `res`.
+pub fn patterns(ant: &Antenna, res: &mut CalcResult, rad: &Radiator) -> Patterns {
     let t = Instant::now();
-    let rad = rad.unwrap();
     let el_cut = res.el_max;
     let az_cut: Vec<(f64, Gain)> = (0..=360).into_par_iter().map(|i| {
         let a = i as f64;
@@ -864,24 +898,16 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
         .collect();
     res.t_far_ms += t.elapsed().as_secs_f64() * 1e3;
     res.t_total_ms += t.elapsed().as_secs_f64() * 1e3;
-    let warnings = mesh.warnings.clone();
-    Ok(FullResult {
-        result: res,
-        patterns: Patterns {
-            az_cut,
-            el_cut_deg: el_cut,
-            el_cut: el_pts,
-            az_cut_deg: azf,
-            free_space: ant.ground.kind == GroundKind::Free,
-            grid,
-            grid_els,
-            grid_step,
-        },
-        currents: sol.currents,
-        mesh,
-        warnings,
-        seg_currents: None,
-    })
+    Patterns {
+        az_cut,
+        el_cut_deg: el_cut,
+        el_cut: el_pts,
+        az_cut_deg: azf,
+        free_space: ant.ground.kind == GroundKind::Free,
+        grid,
+        grid_els,
+        grid_step,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -905,6 +931,10 @@ pub fn sweep(ant: &Antenna, f0: f64, f1: f64, steps: usize, with_gain: bool) -> 
     let t = Instant::now();
     let steps = steps.max(2);
     let seg_f = f1.max(f0).max(ant.freq_mhz);
+    if ant.engine == Engine::Wiremom {
+        let freqs: Vec<f64> = (0..steps).map(|i| f0 + (f1 - f0) * i as f64 / (steps - 1) as f64).collect();
+        crate::wm::prepare_sweep(ant, &freqs, seg_f);
+    }
     let pts: Result<Vec<SweepPoint>, String> = (0..steps)
         .into_par_iter()
         .map(|i| {

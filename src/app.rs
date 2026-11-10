@@ -166,8 +166,10 @@ impl App {
             ins_all_mm: 0.5,
             ins_all_kind: 0,
         };
-        if std::env::var("WIREANT_ENGINE").map(|v| v.eq_ignore_ascii_case("nec")).unwrap_or(false) && crate::nec::available() {
-            app.ant.engine = Engine::Nec2;
+        match std::env::var("WIREANT_ENGINE").map(|v| v.to_ascii_lowercase()).as_deref() {
+            Ok("nec") if crate::nec::available() => app.ant.engine = Engine::Nec2,
+            Ok("wiremom") => app.ant.engine = Engine::Wiremom,
+            _ => {}
         }
         if let Some(p) = open {
             app.open_path(p);
@@ -1155,6 +1157,7 @@ fn status_line(r: &CalcResult) -> String {
 fn engine_pick(ui: &mut egui::Ui, id: &str, e: &mut Engine) {
     egui::ComboBox::from_id_salt(id).selected_text(e.label()).show_ui(ui, |ui| {
         ui.selectable_value(e, Engine::Mininec, Engine::Mininec.label());
+        ui.selectable_value(e, Engine::Wiremom, Engine::Wiremom.label());
         if crate::nec::available() {
             ui.selectable_value(e, Engine::Nec2, Engine::Nec2.label());
         } else {
@@ -1162,7 +1165,7 @@ fn engine_pick(ui: &mut egui::Ui, id: &str, e: &mut Engine) {
         }
     })
     .response
-    .on_hover_text("MININEC: the original's method, real ground only in the far field.\nNEC-2: public-domain NEC-2 (nec2c) with Sommerfeld-Norton real ground; each calculation runs as its own process, sweeps run many at once.");
+    .on_hover_text("MININEC: the original's method, real ground only in the far field.\nwiremom: built-in MPIE solver (triangle currents, Galerkin) with Sommerfeld real ground, multi-threaded in-process.\nNEC-2: public-domain NEC-2 (nec2c) with Sommerfeld-Norton real ground; each calculation runs as its own process, sweeps run many at once.");
 }
 
 fn wire_pick(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, wire: &mut usize, n: usize) {

@@ -9,6 +9,7 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 num-complex = "0.4.6"
 rayon = "1.12.0"
 rfd = "0.18.0"
+wiremom = { version = "0.1.0", path = "../wiremom" }
 
 [profile.dev]
 opt-level = 2

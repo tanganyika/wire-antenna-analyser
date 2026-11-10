@@ -4,6 +4,7 @@ mod model;
 mod mom;
 mod nec;
 mod nec_file;
+mod wm;
 mod ez;
 mod optimize;
 mod plots;

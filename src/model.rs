@@ -167,6 +167,9 @@ pub enum Engine {
     Mininec,
     /// The bundled public-domain NEC-2 engine (nec2c), with Sommerfeld real ground.
     Nec2,
+    /// The wiremom engine: MPIE with triangle basis functions and Galerkin testing,
+    /// Sommerfeld real ground, in-process and multi-threaded.
+    Wiremom,
 }
 
 impl Engine {
@@ -174,6 +177,7 @@ impl Engine {
         match self {
             Engine::Mininec => "MININEC (built-in, multi-threaded)",
             Engine::Nec2 => "NEC-2 (nec2c, Sommerfeld ground)",
+            Engine::Wiremom => "wiremom (built-in MPIE, Sommerfeld ground)",
         }
     }
 }

@@ -10,8 +10,9 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 
 ## Features
 
-- **Two engines**
+- **Three engines**
   - built-in multi-threaded MININEC-style solver (the method MMANA uses)
+  - built-in multi-threaded **wiremom** solver ([../wiremom](../wiremom)): MPIE with triangle currents and Galerkin testing, perfect or Sommerfeld real ground, all in-process; sweeps share Sommerfeld tables
   - bundled public-domain NEC-2 (`nec2c`) with Sommerfeld-Norton real ground; sweeps run many NEC-2 processes in parallel
 - **Files:** open and save MMANA `.maa` (English and Russian headings), NEC `.nec` (including 4nec2 `SY` symbols, helices, arcs, GM/GR/GX), and EZNEC `.ez`
 - **Tabs:** Geometry, 3D view (click a wire to zoom in, scale bar), Calculate, Far field plots (movable gain marker), 3D pattern (ARRL / dB / linear), Frequency sweep, Optimizer
@@ -20,8 +21,9 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 
 ## Install on Linux
 
-You need Rust (<https://rustup.rs>) and a C compiler (`sudo apt install build-essential` on
-Debian/Ubuntu/Zorin). Then:
+You need Rust (<https://rustup.rs>), a C compiler (`sudo apt install build-essential` on
+Debian/Ubuntu/Zorin), and the [wiremom](../wiremom) crate checked out next to this folder
+(`../wiremom`). Then:
 
 ```sh
 ./install.sh        # builds if needed, installs to ~/.local (menu entry, icon, file types)
@@ -44,6 +46,7 @@ window and exits (used for automated checks).
 |---|---|
 | `src/mom.rs` | built-in solver (segmentation, matrix fill, LU, far field, sweeps) |
 | `src/nec.rs` | NEC-2 engine bridge (deck writer, report parser) |
+| `src/wm.rs` | wiremom engine bridge (antenna → wiremom model, results → shared result types) |
 | `nec2c/`, `build.rs` | bundled nec2c 1.3.1 source (public domain) and its build |
 | `src/maa.rs`, `src/nec_file.rs`, `src/ez.rs` | file formats |
 | `src/optimize.rs` | optimizer |

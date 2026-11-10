@@ -632,6 +632,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "complex-bessel"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ec6688beb0cb7bbc135ffc88b928e96c546ee757e6fc31e06dfb6f32de17fea"
+dependencies = [
+ "num-complex",
+ "num-traits",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4184,6 +4194,16 @@ dependencies = [
  "num-complex",
  "rayon",
  "rfd",
+ "wiremom",
+]
+
+[[package]]
+name = "wiremom"
+version = "0.1.0"
+dependencies = [
+ "complex-bessel",
+ "num-complex",
+ "rayon",
 ]
 
 [[package]]
