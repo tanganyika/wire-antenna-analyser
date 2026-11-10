@@ -88,9 +88,8 @@ These are the weaker spots, with how far they have been checked.
   or radials) use a perfect-ground stand-in for the currents. A point contact into
   lossy earth can't be modelled. The warning suggests adding a rod or radials.
 - **Speed:**
-  - **Buried wires:** the air-to-ground couplings are computed directly, not
-    tabulated. A vertical with 8 buried radials takes about 0.8 s per frequency,
-    so sweeps of such models are slow.
+  - **Buried wires:** a vertical with 8 buried radials takes about 70 ms per
+    frequency (sea water needs finer tables: about 0.3 s for 16 radials).
   - **Everything else:** for the 3-element Yagi (24-point sweep with gain and
     F/B, 12 threads), wiremom takes about 110 ms in free space, against 90 ms for
     MININEC and 170 ms for NEC-2. On perfect ground all three take about
