@@ -524,7 +524,7 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     if ant.lines.iter().any(|t| t.loss_db > 0.0) {
         warnings.push("NEC-2 transmission lines are lossless: line loss is ignored by this engine (the wiremom engine includes it).".to_string());
     }
-    if crate::wm::uses_ground_stand_in(ant) {
+    if crate::wm::touches_ground(ant) && !crate::wm::has_buried(ant) {
         warnings.push(NEC2_GROUND_CONNECTED.to_string());
     }
     Ok(FullResult {

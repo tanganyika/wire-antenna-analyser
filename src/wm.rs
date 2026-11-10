@@ -23,6 +23,8 @@ static TABLES: LazyLock<wiremom::TableCache> = LazyLock::new(Default::default);
 /// ground (rods, buried radials) are modelled in full instead.
 pub const GROUND_CONNECTED_NOTE: &str = "Wires connect to the real ground: impedance and currents are calculated over perfect ground (as for a good radial system); the pattern includes the real ground's reflection. Ground losses at the connection are not included. To model the ground system itself, add ground rods or buried radials (wires below z = 0).";
 
+pub const SURFACE_WIRES_NOTE: &str = "Wires lying on the ground (height 0) are modelled just under the surface, in the soil, with the real ground's losses. Wires ending at height 0 join them there.";
+
 fn usable(w: &Wire) -> bool {
     w.length() > 0.0 && w.r != 0.0
 }
@@ -31,6 +33,21 @@ fn usable(w: &Wire) -> bool {
 pub fn touches_ground(ant: &Antenna) -> bool {
     let dz = ant.ground.add_height;
     ant.ground.kind == GroundKind::Real && ant.wires.iter().any(|w| usable(w) && ((w.p1[2] + dz).abs() < 1e-6 || (w.p2[2] + dz).abs() < 1e-6))
+}
+
+/// Real ground with some wire lying in the ground surface (both ends at height 0,
+/// after "add height"), such as radials laid on the soil.
+pub fn lies_on_ground(ant: &Antenna) -> bool {
+    let dz = ant.ground.add_height;
+    ant.ground.kind == GroundKind::Real && ant.wires.iter().any(|w| usable(w) && (w.p1[2] + dz).abs() < 1e-6 && (w.p2[2] + dz).abs() < 1e-6)
+}
+
+/// How far under the surface wires lying on the ground are put: 1 cm, or 5 radii
+/// for thick wires (the thin-wire kernel needs the wire clear of its image).
+pub fn surface_depth(ant: &Antenna) -> f64 {
+    let dz = ant.ground.add_height;
+    let r = ant.wires.iter().filter(|w| usable(w) && ((w.p1[2] + dz).abs() < 1e-6 || (w.p2[2] + dz).abs() < 1e-6)).map(|w| w.r.abs()).fold(0.0, f64::max);
+    (5.0 * r).max(0.01)
 }
 
 /// Real ground with wires (partly) below the surface: modelled in full by wiremom.
@@ -42,7 +59,7 @@ pub fn has_buried(ant: &Antenna) -> bool {
 /// The perfect-ground stand-in for wires that stop on real ground (see
 /// GROUND_CONNECTED_NOTE) applies.
 pub fn uses_ground_stand_in(ant: &Antenna) -> bool {
-    touches_ground(ant) && !has_buried(ant)
+    touches_ground(ant) && !has_buried(ant) && !lies_on_ground(ant)
 }
 
 /// The wiremom model of `ant`, segmented for wavelength `lambda`, with loads
@@ -59,9 +76,12 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<(Model, Vec<us
     // as the MININEC engine does)
     let mut index = vec![None; ant.wires.len()];
     let mut app_wire = vec![];
+    // wires lying on real ground go just under it (see SURFACE_WIRES_NOTE)
+    let sink = if lies_on_ground(ant) { surface_depth(ant) } else { 0.0 };
+    let z = |v: f64| if sink > 0.0 && v.abs() < 1e-6 { -sink } else { v };
     for (wi, w) in ant.wires.iter().enumerate() {
-        let p1 = [w.p1[0], w.p1[1], w.p1[2] + dz];
-        let p2 = [w.p2[0], w.p2[1], w.p2[2] + dz];
+        let p1 = [w.p1[0], w.p1[1], z(w.p1[2] + dz)];
+        let p2 = [w.p2[0], w.p2[1], z(w.p2[2] + dz)];
         let len = w.length();
         if !(len > 0.0) || !(w.r.abs() > 0.0) {
             continue;
@@ -222,6 +242,9 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     if uses_ground_stand_in(ant) {
         warnings.push(GROUND_CONNECTED_NOTE.to_string());
     }
+    if lies_on_ground(ant) {
+        warnings.push(SURFACE_WIRES_NOTE.to_string());
+    }
     let mesh = view_mesh(ant, &ws, &app_wire);
     let seg_currents = ws.segment_currents().into_iter().map(|(a, b, i)| (a, b, i.norm())).collect();
     Ok(FullResult { result: res, patterns, mesh, currents: vec![], warnings, seg_currents: Some(seg_currents) })
@@ -326,6 +349,31 @@ mod tests {
     }
 
     #[test]
+    fn radials_lying_on_real_ground_are_modelled_in_the_soil() {
+        // a vertical with radials laid on the ground, all to one side: at height 0
+        // the radials must still count (the perfect-ground stand-in used to cancel
+        // them, giving a symmetric pattern)
+        let mut a = with(3, Engine::Wiremom);
+        a.ground.kind = GroundKind::Real;
+        a.ground.eps_r = 13.0;
+        a.ground.sigma_ms = 5.0;
+        for i in 0..6 {
+            let t = (-50.0 + 20.0 * i as f64).to_radians();
+            a.wires.push(Wire::new([0.0, 0.0, 0.0], [8.0 * t.cos(), 8.0 * t.sin(), 0.0], 0.001));
+        }
+        assert!(lies_on_ground(&a) && !uses_ground_stand_in(&a));
+        let w = mom::calculate(&a).unwrap();
+        assert!(w.warnings.iter().any(|s| s == SURFACE_WIRES_NOTE));
+        assert!(!w.warnings.iter().any(|s| s == GROUND_CONNECTED_NOTE));
+        let az = &w.patterns.az_cut;
+        let db = |deg: usize| 10.0 * az[deg].1.total.log10();
+        println!("radials on the ground to +x: Z={:.1} Ga={:.2}, gain toward 0 deg {:.2}, 180 deg {:.2}", w.result.z, w.result.ga_dbi, db(0), db(180));
+        assert!((db(0) - db(180)).abs() > 0.5, "{} vs {}", db(0), db(180));
+        // ground loss: well under the perfect-ground gain
+        assert!(w.result.ga_dbi < 3.0);
+    }
+
+    #[test]
     fn vertical_with_rod_and_buried_radials() {
         // the quarter-wave vertical fed against a 1 m rod and 8 buried radials over
         // average ground: modelled in full (no stand-in), with ground loss
@@ -419,3 +467,4 @@ mod tests {
         assert!(r.points.iter().all(|p| p.z.re > 0.0 && p.ga_dbi.is_finite()));
     }
 }
+

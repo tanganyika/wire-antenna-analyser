@@ -84,9 +84,14 @@ These are the weaker spots, with how far they have been checked.
   nec2c can't: it gives a meaningless 259 − j232 Ω for a vertical connected to
   average ground. The engine is checked against exact limits and a classic
   ground-rod formula (Dwight, within 0.7%), not against measurements or NEC-4.
-- **Wires that stop on the surface of real ground** with nothing below it (no rod
-  or radials) use a perfect-ground stand-in for the currents. A point contact into
-  lossy earth can't be modelled. The warning suggests adding a rod or radials.
+- **Wires lying on real ground** (height 0, such as radials laid on the soil) are
+  modelled 1 cm under the surface, in the soil, with the ground's losses. A note
+  in the results says so. Results differ a little from radials just above the
+  ground, as they do in practice.
+- **Wires that only stop on the surface of real ground**, with nothing lying on
+  it or below it (no rod or radials), use a perfect-ground stand-in for the
+  currents. A point contact into lossy earth can't be modelled. The warning
+  suggests adding a rod or radials.
 - **Speed:**
   - **Buried wires:** a vertical with 8 buried radials takes about 70 ms per
     frequency (sea water needs finer tables: about 0.3 s for 16 radials).
