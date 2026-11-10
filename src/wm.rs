@@ -131,15 +131,9 @@ mod tests {
         a
     }
 
-    /// NEC-2 as a reference, with uniform segments: NEC-2 itself loses accuracy with
-    /// the tapered (MMANA-style) segmentation next to a feed (e.g. +0.25 dB on the
-    /// quarter-wave vertical, above the 5.15 dBi a lossless one can reach).
-    fn nec2_uniform(a: &Antenna) -> CalcResult {
+    fn nec2(a: &Antenna) -> CalcResult {
         let mut n = a.clone();
         n.engine = Engine::Nec2;
-        for w in &mut n.wires {
-            w.seg = 0;
-        }
         mom::calculate(&n).unwrap().result
     }
 
@@ -151,7 +145,7 @@ mod tests {
             let name = Antenna::example(i).name;
             print!("{name}: wiremom Z={:.1} Ga={:.2} FB={:.1} ({:.0} ms) | MININEC Z={:.1} Ga={:.2} FB={:.1}", w.z, w.ga_dbi, w.fb_db, w.t_total_ms, m.z, m.ga_dbi, m.fb_db);
             if crate::nec::available() {
-                let n = nec2_uniform(&with(i, Engine::Nec2));
+                let n = nec2(&with(i, Engine::Nec2));
                 println!(" | NEC-2 Z={:.1} Ga={:.2} FB={:.1}", n.z, n.ga_dbi, n.fb_db);
                 assert!((w.ga_dbi - n.ga_dbi).abs() < 0.3, "{name}: gain {} vs NEC-2 {}", w.ga_dbi, n.ga_dbi);
                 assert!((w.z - n.z).norm() < 0.08 * n.z.norm() + 2.0, "{name}: Z {} vs NEC-2 {}", w.z, n.z);
@@ -176,7 +170,7 @@ mod tests {
             a.ground.eps_r = 13.0;
             a.ground.sigma_ms = 5.0;
             let Ok(w) = mom::calculate(&a) else { continue }; // e.g. wires touching the ground
-            let n = nec2_uniform(&a);
+            let n = nec2(&a);
             let w = w.result;
             println!("{} over average ground: wiremom Z={:.1} Ga={:.2} el={:.0} | NEC-2 Z={:.1} Ga={:.2} el={:.0}", a.name, w.z, w.ga_dbi, w.el_max, n.z, n.ga_dbi, n.el_max);
             assert!((w.ga_dbi - n.ga_dbi).abs() < 0.3, "{}", a.name);

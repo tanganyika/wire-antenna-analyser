@@ -84,7 +84,13 @@ fn layout(ant: &Antenna, lambda: f64) -> Layout {
         if len <= 0.0 || w.r == 0.0 {
             continue;
         }
-        let lens = mom::wire_segment_lengths(len, lambda, w.seg, w.r, &ant.seg);
+        // Automatic segmentation (seg < 0) is MMANA's taper: very short segments at the
+        // wire ends.  NEC-2 is inaccurate with a feed on such a segment (the quarter-wave
+        // vertical example came out 0.25 dB above what a lossless one can reach), so
+        // NEC-2 gets uniform segments at the taper's long-segment density (the seg = 0
+        // rule, lambda/DM2) instead.  Explicit counts are kept.
+        let seg = if w.seg < 0 { 0 } else { w.seg };
+        let lens = mom::wire_segment_lengths(len, lambda, seg, w.r, &ant.seg);
         // group equal lengths
         let mut runs: Vec<(usize, f64)> = Vec::new();
         for l in lens {
@@ -523,6 +529,22 @@ mod tests {
             println!("{}: MININEC Z={:.1} Ga={:.2} FB={:.1} | NEC-2 Z={:.1} Ga={:.2} FB={:.1} el={} ({:.0} ms)", a.name, m.z, m.ga_dbi, m.fb_db, n.z, n.ga_dbi, n.fb_db, n.el_max, n.t_total_ms);
             assert!((m.ga_dbi - n.ga_dbi).abs() < 1.5);
         }
+    }
+}
+
+#[cfg(test)]
+mod segmentation_test {
+    use super::*;
+    #[test]
+    fn quarter_wave_vertical_gain_is_physical() {
+        if !available() {
+            return;
+        }
+        // lossless-limit 5.15 dBi; copper loss makes it a little less
+        let mut a = Antenna::example(3);
+        a.engine = Engine::Nec2;
+        let r = calculate(&a).unwrap().result;
+        assert!(r.ga_dbi > 5.05 && r.ga_dbi < 5.16, "{}", r.ga_dbi);
     }
 }
 
