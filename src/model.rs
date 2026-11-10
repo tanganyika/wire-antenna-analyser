@@ -264,6 +264,32 @@ impl Default for Segmentation {
     }
 }
 
+/// A transmission line between two places on wires (a feed line, phasing line or
+/// stub).  Modelled by the wiremom and NEC-2 engines.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TLine {
+    pub a_wire: usize,
+    pub a_pos: f64,
+    pub b_wire: usize,
+    pub b_pos: f64,
+    /// Characteristic impedance (ohms).
+    pub z0: f64,
+    /// Length in metres; 0 = the straight distance between the two ends.
+    pub length: f64,
+    /// Velocity factor (1 = air line, about 0.66 for solid-PE coax).
+    pub vf: f64,
+    /// Loss in dB per 100 m at the calculation frequency.
+    pub loss_db: f64,
+    /// Conductors swapped at the far end (a half twist; NEC's negative Z0).
+    pub reversed: bool,
+}
+
+impl TLine {
+    pub fn new(a_wire: usize, a_pos: f64, b_wire: usize, b_pos: f64) -> TLine {
+        TLine { a_wire, a_pos, b_wire, b_pos, z0: 50.0, length: 0.0, vf: 1.0, loss_db: 0.0, reversed: false }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Antenna {
     pub name: String,
@@ -271,6 +297,8 @@ pub struct Antenna {
     pub wires: Vec<Wire>,
     pub sources: Vec<Source>,
     pub loads: Vec<Load>,
+    /// Transmission lines (not stored in .maa files).
+    pub lines: Vec<TLine>,
     pub ground: Ground,
     pub material: Material,
     /// Reference impedance for SWR (ohms).
@@ -324,6 +352,7 @@ impl Antenna {
             wires: vec![],
             sources: vec![],
             loads: vec![],
+            lines: vec![],
             ground: Ground { kind: GroundKind::Free, eps_r: 13.0, sigma_ms: 5.0, add_height: 0.0 },
             material: Material::CuWire,
             z0: 50.0,

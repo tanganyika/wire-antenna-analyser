@@ -105,6 +105,7 @@ fn layout(ant: &Antenna, lambda: f64) -> Layout {
             .filter(|s| s.wire == wi)
             .map(|s| s.pos)
             .chain(ant.loads.iter().filter(|l| l.wire == wi).map(|l| l.pos))
+            .chain(ant.lines.iter().flat_map(|t| [(t.a_wire, t.a_pos), (t.b_wire, t.b_pos)]).filter(|e| e.0 == wi).map(|e| e.1))
             .filter(|p| *p > 1e-9 && *p < 1.0 - 1e-9)
             .collect();
         let mut s0 = 0.0;
@@ -202,6 +203,24 @@ fn deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<St
         let (tag, seg) = locate(ant, lay, l.wire, l.pos).ok_or_else(|| format!("Load on wire {} has no place to sit.", l.wire + 1))?;
         let z = l.impedance(freq_mhz * 1e6);
         d += &format!("LD 4 {} {} {} {} {}\n", tag, seg, seg, num(z.re), num(z.im));
+    }
+    // transmission lines: NEC-2 lines travel at c, so a velocity factor becomes a
+    // longer electrical length; negative Z0 = reversed
+    for t in &ant.lines {
+        let (ta, sa) = locate(ant, lay, t.a_wire, t.a_pos).ok_or_else(|| format!("Transmission line end on wire {} has no place to sit.", t.a_wire + 1))?;
+        let (tb, sb) = locate(ant, lay, t.b_wire, t.b_pos).ok_or_else(|| format!("Transmission line end on wire {} has no place to sit.", t.b_wire + 1))?;
+        let at = |w: usize, f: f64| -> [f64; 3] {
+            let w = &ant.wires[w];
+            [0, 1, 2].map(|i| w.p1[i] + (w.p2[i] - w.p1[i]) * f)
+        };
+        let len = if t.length > 0.0 {
+            t.length
+        } else {
+            let (p, q) = (at(t.a_wire, t.a_pos), at(t.b_wire, t.b_pos));
+            (0..3).map(|i| (p[i] - q[i]).powi(2)).sum::<f64>().sqrt()
+        };
+        let z0 = if t.reversed { -t.z0.abs() } else { t.z0.abs() };
+        d += &format!("TL {} {} {} {} {} {} 0 0 0 0\n", ta, sa, tb, sb, num(z0), num(len / t.vf.max(1e-6)));
     }
     for s in &ant.sources {
         let (tag, seg) = locate(ant, lay, s.wire, s.pos).ok_or_else(|| format!("Source on wire {} has no place to sit.", s.wire + 1))?;
@@ -498,6 +517,9 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     }
     let mesh = mom::build_mesh(ant, ant.lambda())?;
     let mut warnings = mesh.warnings.clone();
+    if ant.lines.iter().any(|t| t.loss_db > 0.0) {
+        warnings.push("NEC-2 transmission lines are lossless: line loss is ignored by this engine (the wiremom engine includes it).".to_string());
+    }
     if crate::wm::uses_ground_stand_in(ant) {
         warnings.push(NEC2_GROUND_CONNECTED.to_string());
     }

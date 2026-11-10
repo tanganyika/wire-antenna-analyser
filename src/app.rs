@@ -223,7 +223,11 @@ impl App {
     }
 
     fn set_antenna(&mut self, a: Antenna) {
-        let engine = self.ant.engine;
+        let mut engine = self.ant.engine;
+        if !a.lines.is_empty() && engine == Engine::Mininec {
+            // MININEC can't model transmission lines
+            engine = Engine::Wiremom;
+        }
         self.ant = a;
         self.ant.engine = engine;
         self.calc = None;
@@ -708,6 +712,45 @@ impl App {
                     self.ant.loads.remove(i);
                 }
             });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.heading("Transmission lines");
+                if ui.button("➕ Add").clicked() {
+                    let b = if nw > 1 { 1 } else { 0 };
+                    self.ant.lines.push(TLine::new(0, 0.5, b, 0.5));
+                }
+                ui.label(RichText::new("feed lines, phasing lines and stubs — wiremom and NEC-2 engines").weak());
+            });
+            if !self.ant.lines.is_empty() {
+                let mut del = None;
+                egui::Grid::new("lines").striped(true).show(ui, |ui| {
+                    for h in ["From wire", "Position", "To wire", "Position", "Z0 (Ω)", "Length (m)", "Vel. factor", "Loss (dB/100 m)", "Reversed", ""] {
+                        ui.label(RichText::new(h).strong());
+                    }
+                    ui.end_row();
+                    for (i, t) in self.ant.lines.iter_mut().enumerate() {
+                        wire_pick(ui, ("taw", i), &mut t.a_wire, nw);
+                        pos_pick(ui, ("tap", i), &mut t.a_pos);
+                        wire_pick(ui, ("tbw", i), &mut t.b_wire, nw);
+                        pos_pick(ui, ("tbp", i), &mut t.b_pos);
+                        ui.add(egui::DragValue::new(&mut t.z0).speed(0.5).range(1.0..=10000.0));
+                        ui.add(egui::DragValue::new(&mut t.length).speed(0.01).range(0.0..=1e6).max_decimals(4))
+                            .on_hover_text("0 = the straight distance between the two ends");
+                        ui.add(egui::DragValue::new(&mut t.vf).speed(0.005).range(0.1..=1.0).max_decimals(3))
+                            .on_hover_text("Velocity factor: 1 for an air-spaced line, about 0.66 for solid-PE coax, 0.8 for foam");
+                        ui.add(egui::DragValue::new(&mut t.loss_db).speed(0.05).range(0.0..=100.0).max_decimals(2))
+                            .on_hover_text("Matched-line loss at the calculation frequency (NEC-2 ignores it)");
+                        ui.checkbox(&mut t.reversed, "").on_hover_text("Conductors swapped at the far end (a half twist)");
+                        if ui.small_button("🗑").clicked() {
+                            del = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+                if let Some(i) = del {
+                    self.ant.lines.remove(i);
+                }
+            }
             ui.add_space(8.0);
             ui.columns(2, |cols| {
                 let ui = &mut cols[0];

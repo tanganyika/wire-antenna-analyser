@@ -555,6 +555,17 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
             painter.text(proj(at(w, 0.5)) + Vec2::new(4.0, -4.0), Align2::LEFT_BOTTOM, format!("{}", i + 1), FontId::proportional(10.0), Color32::from_rgb(90, 90, 120));
         }
     }
+    // transmission lines: a dashed link between their ends
+    for t in &ant.lines {
+        if let (Some(wa), Some(wb)) = (ant.wires.get(t.a_wire), ant.wires.get(t.b_wire)) {
+            let (p, q) = (proj(at(wa, t.a_pos)), proj(at(wb, t.b_pos)));
+            let n = ((q - p).length() / 6.0).ceil().max(1.0) as usize;
+            for k in (0..n).step_by(2) {
+                let (u, v) = (k as f32 / n as f32, ((k + 1) as f32 / n as f32).min(1.0));
+                painter.line_segment([p + (q - p) * u, p + (q - p) * v], Stroke::new(1.5, Color32::from_rgb(200, 120, 20)));
+            }
+        }
+    }
     for l in &ant.loads {
         if let Some(w) = ant.wires.get(l.wire) {
             let p = proj(at(w, l.pos));

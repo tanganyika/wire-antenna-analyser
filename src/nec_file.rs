@@ -194,6 +194,9 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
     let mut ex: Vec<(i64, i64, f64, f64)> = Vec::new();
     let mut ld: Vec<(i64, i64, i64, i64, f64, f64, f64)> = Vec::new();
     let mut insul: HashMap<usize, (f64, f64)> = HashMap::new();
+    let mut tl: Vec<(i64, i64, i64, i64, f64, f64, bool)> = Vec::new();
+    // exact line values written by this program (NEC-2 TL can't hold them): index -> (vf, loss)
+    let mut tl_extra: HashMap<usize, (f64, f64)> = HashMap::new();
     for (ln, raw) in text.lines().enumerate() {
         let line = raw.trim_end_matches('\r');
         let t = line.trim();
@@ -210,6 +213,11 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
                     let v: Vec<f64> = x.split_whitespace().filter_map(|s| s.parse().ok()).collect();
                     if v.len() >= 3 && v[0] >= 1.0 {
                         insul.insert(v[0] as usize - 1, (v[1], v[2]));
+                    }
+                } else if let Some(x) = c.strip_prefix("wireant line") {
+                    let v: Vec<f64> = x.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+                    if v.len() >= 3 && v[0] >= 1.0 {
+                        tl_extra.insert(v[0] as usize - 1, (v[1], v[2]));
                     }
                 } else if !c.is_empty() {
                     comments.push(c);
@@ -357,6 +365,10 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
                 }
             }
             "LD" => ld.push((int(0)?, int(1)?, int(2)?, int(3)?, num(4)?, num(5)?, num(6)?)),
+            "TL" => {
+                let shunts = (6..10).map(num).collect::<Result<Vec<f64>, String>>()?;
+                tl.push((int(0)?, int(1)?, int(2)?, int(3)?, num(4)?, num(5)?, shunts.iter().any(|y| *y != 0.0)));
+            }
             "FR" => {
                 if freq.is_none() {
                     freq = Some(num(4)?);
@@ -482,6 +494,27 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
             _ => warn.push(format!("load type LD {ty} skipped")),
         }
     }
+    ant.lines.clear();
+    for (i, &(t1, s1, t2, s2, z0, len, shunts)) in tl.iter().enumerate() {
+        match (locate(t1, s1), locate(t2, s2)) {
+            (Some((wa, pa)), Some((wb, pb))) => {
+                let (vf, loss) = tl_extra.get(&i).copied().unwrap_or((1.0, 0.0));
+                let mut t = TLine::new(wa, pa, wb, pb);
+                t.z0 = z0.abs();
+                t.reversed = z0 < 0.0;
+                // NEC-2 lengths are electrical (at c); with a stored velocity factor the
+                // physical length is shorter
+                t.length = len.max(0.0) * vf;
+                t.vf = vf;
+                t.loss_db = loss;
+                ant.lines.push(t);
+                if shunts {
+                    warn.push(format!("transmission line {}: end shunt admittances skipped", i + 1));
+                }
+            }
+            _ => warn.push(format!("transmission line {} skipped: tag {t1} segment {s1} or tag {t2} segment {s2} not found", i + 1)),
+        }
+    }
     if ant.sources.is_empty() {
         warn.push("No voltage source (EX 0) found".into());
     }
@@ -505,6 +538,9 @@ pub fn write(ant: &Antenna) -> String {
     for (i, w) in ant.wires.iter().enumerate().filter(|(_, w)| w.insulated()) {
         o += &format!("CM wireant insulation {} {} {}\n", i + 1, w.ins_t, w.ins_eps);
     }
+    for (i, t) in ant.lines.iter().enumerate().filter(|(_, t)| t.vf != 1.0 || t.loss_db != 0.0) {
+        o += &format!("CM wireant line {} {} {}\n", i + 1, t.vf, t.loss_db);
+    }
     o += "CE\n";
     let lam = ant.lambda();
     let grounded = ant.ground.kind != GroundKind::Free;
@@ -514,7 +550,8 @@ pub fn write(ant: &Antenna) -> String {
         let mut ns = if w.seg > 0 { w.seg as usize } else { crate::mom::wire_segment_lengths(w.length(), lam, w.seg, w.r, &ant.seg).len() };
         // NEC feeds at segment centres: a centre source or load needs an odd count
         let centre = ant.sources.iter().any(|s| s.wire == i && (s.pos - 0.5).abs() < 1e-9)
-            || ant.loads.iter().any(|l| l.wire == i && (l.pos - 0.5).abs() < 1e-9);
+            || ant.loads.iter().any(|l| l.wire == i && (l.pos - 0.5).abs() < 1e-9)
+            || ant.lines.iter().any(|t| (t.a_wire == i && (t.a_pos - 0.5).abs() < 1e-9) || (t.b_wire == i && (t.b_pos - 0.5).abs() < 1e-9));
         if centre && ns % 2 == 0 {
             ns += 1;
         }
@@ -577,6 +614,16 @@ pub fn write(ant: &Antenna) -> String {
         let v = num_complex::Complex64::from_polar(s.volts, s.phase_deg.to_radians());
         o += &format!("EX 0 {} {} 0 {} {}\n", s.wire + 1, seg_of(s.wire, s.pos), n(v.re), n(v.im));
     }
+    for t in &ant.lines {
+        if t.a_wire >= ant.wires.len() || t.b_wire >= ant.wires.len() {
+            continue;
+        }
+        let z0 = if t.reversed { -t.z0.abs() } else { t.z0.abs() };
+        // NEC-2 lines travel at c: write the electrical length (0 = straight distance,
+        // only exact when the velocity factor is 1)
+        let len = if t.length > 0.0 { t.length / t.vf.max(1e-6) } else { 0.0 };
+        o += &format!("TL {} {} {} {} {} {} 0 0 0 0\n", t.a_wire + 1, seg_of(t.a_wire, t.a_pos), t.b_wire + 1, seg_of(t.b_wire, t.b_pos), n(z0), n(len));
+    }
     o += &format!("FR 0 1 0 0 {} 0\n", n(ant.freq_mhz));
     o += "RP 0 91 361 1000 0 0 1 1\nEN\n";
     o
@@ -585,6 +632,28 @@ pub fn write(ant: &Antenna) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transmission_lines_round_trip() {
+        let mut a = Antenna::example(0);
+        a.wires.push(Wire::new([0.0, 0.0, 20.0], [0.0, 0.0, 20.1], 0.001));
+        a.wires[1].seg = 3;
+        let mut t = TLine::new(1, 0.5, 0, 0.5);
+        t.z0 = 75.0;
+        t.length = 9.1;
+        t.vf = 0.66;
+        t.loss_db = 1.5;
+        t.reversed = true;
+        a.lines.push(t.clone());
+        let text = write(&a);
+        assert!(text.contains("TL 2 2 1 "), "{text}");
+        let back = parse(&text, "x").unwrap().ant;
+        assert_eq!(back.lines.len(), 1);
+        let b = &back.lines[0];
+        assert_eq!((b.a_wire, b.b_wire, b.reversed), (1, 0, true));
+        assert!((b.z0 - 75.0).abs() < 1e-9 && (b.length - 9.1).abs() < 1e-6 && (b.vf - 0.66).abs() < 1e-9 && (b.loss_db - 1.5).abs() < 1e-9, "{b:?}");
+        assert!((b.a_pos - 0.5).abs() < 1e-9 && (b.b_pos - 0.5).abs() < 1e-9);
+    }
 
     #[test]
     fn round_trip_examples() {

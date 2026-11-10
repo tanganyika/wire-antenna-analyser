@@ -618,18 +618,6 @@ impl Radiator {
         Radiator { pos, cur, k: omega / C0, ground: ant.ground.clone(), lambda: C0 / f, gain_const, external: None }
     }
 
-    /// Radiator from current elements computed elsewhere (another engine): positions
-    /// and current moments I·dl (A·m), the frequency, and the input power ½Re(V·I*).
-    pub fn from_elements(elements: Vec<(V3, [C; 3])>, freq_mhz: f64, ground: &Ground, p_in: f64) -> Radiator {
-        let f = freq_mhz * 1e6;
-        let omega = 2.0 * PI * f;
-        let c = omega * MU0 / (4.0 * PI);
-        const GAIN_NORM: f64 = 0.033356;
-        let gain_const = if p_in > 0.0 { c * c * GAIN_NORM / (2.0 * p_in) } else { 0.0 };
-        let (pos, cur) = elements.into_iter().unzip();
-        Radiator { pos, cur, k: omega / C0, ground: ground.clone(), lambda: C0 / f, gain_const, external: None }
-    }
-
     /// Radiator whose gain comes from another engine's own far-field code.
     pub fn from_fn(freq_mhz: f64, ground: &Ground, gain: GainFn) -> Radiator {
         let f = freq_mhz * 1e6;
@@ -821,6 +809,9 @@ pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) ->
             return Ok((r, empty_mesh(), sol, rad));
         }
         Engine::Mininec => {}
+    }
+    if !ant.lines.is_empty() {
+        return Err("Transmission lines need the wiremom or NEC-2 engine (choose it under Calculate → Engine).".into());
     }
     let t0 = Instant::now();
     let mesh = build_mesh(ant, 299.792458 / seg_freq_mhz)?;

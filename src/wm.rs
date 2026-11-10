@@ -9,7 +9,7 @@ use crate::mom::{self, CalcResult, FullResult, Gain, Radiator, Solution};
 use num_complex::Complex64 as C;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
-use wiremom::{Conductor, Ground as WGround, LoadKind, Model, RealGround, Segments};
+use wiremom::{Conductor, Ground as WGround, LoadKind, Model, Port, RealGround, Segments, TwoPortKind};
 
 /// Sommerfeld tables shared by every calculation, so a sweep or an optimizer run
 /// builds each table once (tables are reused within ±1 % of their frequency).
@@ -101,6 +101,18 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<(Model, Vec<us
     for l in &ant.loads {
         let w = wire_of(l.wire, "a load")?;
         m.add_load(w, mesh.nearest_node(w, l.pos), LoadKind::Impedance(l.impedance(freq_mhz * 1e6)));
+    }
+    for t in &ant.lines {
+        let (wa, wb) = (wire_of(t.a_wire, "a transmission line")?, wire_of(t.b_wire, "a transmission line")?);
+        let kind = TwoPortKind::Line {
+            z0: t.z0.abs(),
+            length: (t.length > 0.0).then_some(t.length),
+            velocity_factor: t.vf,
+            loss_db_per_100m: t.loss_db,
+            crossed: t.reversed,
+            shunt: [C::new(0.0, 0.0); 2],
+        };
+        m.add_network(Port { wire: wa, node: mesh.nearest_node(wa, t.a_pos) }, Port { wire: wb, node: mesh.nearest_node(wb, t.b_pos) }, kind);
     }
     Ok((m, app_wire))
 }
@@ -297,6 +309,37 @@ mod tests {
         // the 3D view gets every wire's segments
         assert_eq!(w.mesh.wire_segs.len(), a.wires.len());
         assert!(w.mesh.wire_segs.iter().all(|&(_, n)| n > 0));
+    }
+
+    #[test]
+    fn dipole_fed_through_lines_matches_nec2() {
+        // the half-wave dipole fed from a short feed wire through 75 ohm lines
+        for (len, vf) in [(5.3, 1.0), (9.1, 0.66)] {
+            let mut a = with(0, Engine::Wiremom);
+            a.wires.push(Wire::new([0.0, 0.0, 20.0], [0.0, 0.0, 20.05], 0.001));
+            a.wires[1].seg = 3;
+            a.sources = vec![Source { wire: 1, pos: 0.5, phase_deg: 0.0, volts: 1.0 }];
+            let mut t = TLine::new(1, 0.5, 0, 0.5);
+            t.z0 = 75.0;
+            t.length = len;
+            t.vf = vf;
+            a.lines.push(t);
+            let w = mom::calculate(&a).unwrap().result;
+            let mut d = with(0, Engine::Wiremom);
+            d.material = a.material;
+            let zd = mom::calculate(&d).unwrap().result.z;
+            let bl = 2.0 * std::f64::consts::PI * len / (vf * a.lambda());
+            let want = 75.0 * (zd + C::new(0.0, 75.0 * bl.tan())) / (75.0 + C::new(0.0, 1.0) * zd * bl.tan());
+            print!("line {len} m vf {vf}: wiremom {:.2}, line formula {:.2}", w.z, want);
+            assert!((w.z - want).norm() < 0.02 * want.norm());
+            if crate::nec::available() {
+                a.engine = Engine::Nec2;
+                let n = mom::calculate(&a).unwrap().result;
+                print!(", NEC-2 {:.2}", n.z);
+                assert!((w.z - n.z).norm() < 0.05 * n.z.norm(), "{} vs {}", w.z, n.z);
+            }
+            println!();
+        }
     }
 
     #[test]
