@@ -15,6 +15,20 @@ use wiremom::{Conductor, Ground as WGround, LoadKind, Model, RealGround, Segment
 /// builds each table once (tables are reused within ±1 % of their frequency).
 static TABLES: LazyLock<wiremom::TableCache> = LazyLock::new(Default::default);
 
+/// Shown when wires connect to real ground.  Neither this engine nor NEC-2 can model
+/// current flowing into lossy earth (NEC-2 gives meaningless impedances for it; it
+/// needs NEC-4-style buried-wire fields), so, like the MININEC engine, the currents
+/// and impedance are solved over perfect ground (the connection acting as a good
+/// ground system) and only the radiation pattern includes the real ground.
+pub const GROUND_CONNECTED_NOTE: &str = "Wires connect to the real ground: impedance and currents are calculated over perfect ground (as for a good radial system); the pattern includes the real ground's reflection. Ground losses at the connection are not included.";
+
+/// Real ground with some wire end at ground level (after "add height").
+pub fn touches_ground(ant: &Antenna) -> bool {
+    let dz = ant.ground.add_height;
+    ant.ground.kind == GroundKind::Real
+        && ant.wires.iter().any(|w| w.length() > 0.0 && w.r != 0.0 && ((w.p1[2] + dz).abs() < 1e-6 || (w.p2[2] + dz).abs() < 1e-6))
+}
+
 /// Far-field current elements per segment (Gauss points).
 const ELEMENTS_PER_SEG: usize = 6;
 
@@ -55,6 +69,8 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<Model, String>
     let ground = match ant.ground.kind {
         GroundKind::Free => WGround::Free,
         GroundKind::Perfect => WGround::Perfect,
+        // wires connected to real ground: see GROUND_CONNECTED_NOTE
+        GroundKind::Real if touches_ground(ant) => WGround::Perfect,
         GroundKind::Real => WGround::Real(RealGround { eps_r: ant.ground.eps_r, sigma: ant.ground.sigma_ms * 1e-3 }),
     };
     let mut m = Model::new(wires, ground);
@@ -116,7 +132,10 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     let patterns = mom::patterns(ant, &mut res, &rad.unwrap());
     // the MININEC mesh carries the segmentation warnings and the 3D view's layout
     let mesh = mom::build_mesh(ant, ant.lambda())?;
-    let warnings = mesh.warnings.clone();
+    let mut warnings = mesh.warnings.clone();
+    if touches_ground(ant) {
+        warnings.push(GROUND_CONNECTED_NOTE.to_string());
+    }
     let seg_currents = ws.segment_currents().into_iter().map(|(a, b, i)| (a, b, i.norm())).collect();
     Ok(FullResult { result: res, patterns, mesh, currents: vec![], warnings, seg_currents: Some(seg_currents) })
 }
@@ -169,13 +188,39 @@ mod tests {
             a.ground.kind = GroundKind::Real;
             a.ground.eps_r = 13.0;
             a.ground.sigma_ms = 5.0;
-            let Ok(w) = mom::calculate(&a) else { continue }; // e.g. wires touching the ground
+            if touches_ground(&a) {
+                continue; // NEC-2 can't model a connection into lossy ground (see GROUND_CONNECTED_NOTE)
+            }
+            let w = mom::calculate(&a);
             let n = nec2(&a);
-            let w = w.result;
+            let w = w.unwrap().result;
             println!("{} over average ground: wiremom Z={:.1} Ga={:.2} el={:.0} | NEC-2 Z={:.1} Ga={:.2} el={:.0}", a.name, w.z, w.ga_dbi, w.el_max, n.z, n.ga_dbi, n.el_max);
             assert!((w.ga_dbi - n.ga_dbi).abs() < 0.3, "{}", a.name);
             assert!((w.z - n.z).norm() < 0.08 * n.z.norm() + 2.0, "{}", a.name);
         }
+    }
+
+    #[test]
+    fn ground_connected_vertical_over_real_ground() {
+        // impedance as over perfect ground, pattern with real-ground reflection: the
+        // same model as the MININEC engine, so the two must agree closely
+        let mut a = with(3, Engine::Wiremom);
+        a.ground.kind = GroundKind::Real;
+        a.ground.eps_r = 13.0;
+        a.ground.sigma_ms = 5.0;
+        assert!(touches_ground(&a));
+        let w = mom::calculate(&a).unwrap();
+        assert!(w.warnings.iter().any(|s| s == GROUND_CONNECTED_NOTE));
+        let mut p = a.clone();
+        p.ground.kind = GroundKind::Perfect;
+        let zp = mom::calculate(&p).unwrap().result.z;
+        assert!((w.result.z - zp).norm() < 1e-9 * zp.norm());
+        a.engine = Engine::Mininec;
+        let m = mom::calculate(&a).unwrap().result;
+        println!("vertical on average ground: wiremom Ga={:.2} el={} | MININEC Ga={:.2} el={}", w.result.ga_dbi, w.result.el_max, m.ga_dbi, m.el_max);
+        assert!((w.result.ga_dbi - m.ga_dbi).abs() < 0.1);
+        // real ground pulls the lobe up off the horizon and costs gain
+        assert!(w.result.el_max > 5.0 && w.result.ga_dbi < 2.0);
     }
 
     #[test]
