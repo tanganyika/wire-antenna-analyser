@@ -264,6 +264,29 @@ impl Default for Segmentation {
     }
 }
 
+/// A flat conducting plate (parallelogram) from `corner` along `edge1` and
+/// `edge2`.  Modelled by the wiremom engine; a wire ending on the plate connects to
+/// it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plate {
+    pub corner: [f64; 3],
+    pub edge1: [f64; 3],
+    pub edge2: [f64; 3],
+    /// Mesh divisions along each edge; 0 = automatic (about a tenth of a wavelength).
+    pub n1: usize,
+    pub n2: usize,
+}
+
+impl Plate {
+    pub fn new(corner: [f64; 3], edge1: [f64; 3], edge2: [f64; 3]) -> Plate {
+        Plate { corner, edge1, edge2, n1: 0, n2: 0 }
+    }
+    pub fn corners(&self) -> [[f64; 3]; 4] {
+        let p = |a: f64, b: f64| [0, 1, 2].map(|i| self.corner[i] + a * self.edge1[i] + b * self.edge2[i]);
+        [p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]
+    }
+}
+
 /// A transmission line between two places on wires (a feed line, phasing line or
 /// stub).  Modelled by the wiremom and NEC-2 engines.
 #[derive(Clone, Debug, PartialEq)]
@@ -299,6 +322,8 @@ pub struct Antenna {
     pub loads: Vec<Load>,
     /// Transmission lines (not stored in .maa files).
     pub lines: Vec<TLine>,
+    /// Conducting plates (not stored in .maa files).
+    pub plates: Vec<Plate>,
     pub ground: Ground,
     pub material: Material,
     /// Reference impedance for SWR (ohms).
@@ -353,6 +378,7 @@ impl Antenna {
             sources: vec![],
             loads: vec![],
             lines: vec![],
+            plates: vec![],
             ground: Ground { kind: GroundKind::Free, eps_r: 13.0, sigma_ms: 5.0, add_height: 0.0 },
             material: Material::CuWire,
             z0: 50.0,

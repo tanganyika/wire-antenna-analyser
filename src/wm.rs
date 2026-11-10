@@ -9,7 +9,7 @@ use crate::mom::{self, CalcResult, FullResult, Gain, Radiator, Solution};
 use num_complex::Complex64 as C;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
-use wiremom::{Conductor, Ground as WGround, LoadKind, Model, Port, RealGround, Segments, TwoPortKind};
+use wiremom::{Conductor, Ground as WGround, LoadKind, Model, Port, RealGround, Segments, Surface, TwoPortKind};
 
 /// Sommerfeld tables shared by every calculation, so a sweep or an optimizer run
 /// builds each table once (tables are reused within ±1 % of their frequency).
@@ -82,6 +82,7 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<(Model, Vec<us
             series_l_per_m: w.insulation_l_per_m(),
         });
     }
+    let surfaces: Vec<Surface> = ant.plates.iter().map(|p| plate_surface(p, &wires, dz, lambda)).collect();
     let ground = match ant.ground.kind {
         GroundKind::Free => WGround::Free,
         GroundKind::Perfect => WGround::Perfect,
@@ -90,6 +91,7 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<(Model, Vec<us
         GroundKind::Real => WGround::Real(RealGround { eps_r: ant.ground.eps_r, sigma: ant.ground.sigma_ms * 1e-3 }),
     };
     let mut m = Model::new(wires, ground);
+    m.surfaces = surfaces;
     m.tables = TABLES.clone();
     m.ground_table_reuse = 0.01;
     let mesh = m.mesh().map_err(String::from)?;
@@ -115,6 +117,48 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<(Model, Vec<us
         m.add_network(Port { wire: wa, node: mesh.nearest_node(wa, t.a_pos) }, Port { wire: wb, node: mesh.nearest_node(wb, t.b_pos) }, kind);
     }
     Ok((m, app_wire))
+}
+
+/// A plate's triangle mesh: grid lines about λ/10 apart (or the plate's own
+/// divisions), plus lines through every wire end lying on the plate so the wire has
+/// a vertex to connect to.
+fn plate_surface(p: &Plate, wires: &[wiremom::Wire], dz: f64, lambda: f64) -> Surface {
+    let corner = [p.corner[0], p.corner[1], p.corner[2] + dz];
+    let (e1, e2) = (p.edge1, p.edge2);
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let len = |a: [f64; 3]| dot(a, a).sqrt();
+    // plate coordinates (u, v, w) of a point: solve the 2x2 normal equations
+    let (g11, g12, g22) = (dot(e1, e1), dot(e1, e2), dot(e2, e2));
+    let det = g11 * g22 - g12 * g12;
+    let mut us = vec![0.0, 1.0];
+    let mut vs = vec![0.0, 1.0];
+    let tol = 1e-6 * (len(e1) + len(e2));
+    for w in wires {
+        for q in [w.start, w.end] {
+            let d = [q[0] - corner[0], q[1] - corner[1], q[2] - corner[2]];
+            let (b1, b2) = (dot(d, e1), dot(d, e2));
+            let (u, v) = ((g22 * b1 - g12 * b2) / det, (g11 * b2 - g12 * b1) / det);
+            let off = [0, 1, 2].map(|i| d[i] - u * e1[i] - v * e2[i]);
+            if len(off) < tol && (-1e-9..=1.0 + 1e-9).contains(&u) && (-1e-9..=1.0 + 1e-9).contains(&v) {
+                us.push(u.clamp(0.0, 1.0));
+                vs.push(v.clamp(0.0, 1.0));
+            }
+        }
+    }
+    let lines = |mut xs: Vec<f64>, edge: f64, n: usize| -> Vec<f64> {
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        xs.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        let step = if n > 0 { 1.0 / n as f64 } else { (lambda / 10.0 / edge.max(1e-12)).min(1.0) };
+        let mut out = vec![xs[0]];
+        for w in xs.windows(2) {
+            let k = ((w[1] - w[0]) / step - 1e-9).ceil().max(1.0) as usize;
+            for i in 1..=k {
+                out.push(w[0] + (w[1] - w[0]) * i as f64 / k as f64);
+            }
+        }
+        out
+    };
+    Surface::plate_grid(corner, e1, e2, &lines(us, len(e1), p.n1), &lines(vs, len(e2), p.n2))
 }
 
 /// Build the Sommerfeld tables a sweep over `freqs` (MHz) will need, in parallel,
@@ -340,6 +384,25 @@ mod tests {
             }
             println!();
         }
+    }
+
+    #[test]
+    fn monopole_fed_against_a_plate() {
+        // a quarter-wave monopole on a 1 x 1 wavelength plate at 300 MHz (the plate's
+        // grid gets a line through the monopole's base automatically)
+        let mut a = with(0, Engine::Wiremom);
+        a.freq_mhz = 299.792458;
+        a.material = Material::Lossless;
+        a.wires = vec![Wire::new([0.1, 0.2, 0.0], [0.1, 0.2, 0.24], 0.002)];
+        a.wires[0].seg = 12;
+        a.sources = vec![Source { wire: 0, pos: 0.0, phase_deg: 0.0, volts: 1.0 }];
+        a.plates = vec![Plate::new([-0.5, -0.5, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])];
+        let r = mom::calculate(&a).unwrap().result;
+        println!("monopole on a plate: Z={:.2} Ga={:.2} el={}", r.z, r.ga_dbi, r.el_max);
+        assert!(r.z.re > 33.0 && r.z.re < 48.0, "{}", r.z);
+        // other engines refuse plates
+        a.engine = Engine::Mininec;
+        assert!(mom::calculate(&a).is_err());
     }
 
     #[test]

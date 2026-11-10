@@ -162,6 +162,10 @@ fn num(x: f64) -> String {
 }
 
 fn deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<String, String> {
+    if !ant.plates.is_empty() {
+        // NEC-2 patches only model closed surfaces (MFIE)
+        return Err("Plates need the wiremom engine: NEC-2's patches only model closed surfaces, not thin plates.".into());
+    }
     if lay.pieces.is_empty() {
         return Err("There are no wires.".into());
     }

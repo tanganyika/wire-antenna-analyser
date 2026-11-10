@@ -228,6 +228,10 @@ impl App {
             // MININEC can't model transmission lines
             engine = Engine::Wiremom;
         }
+        if !a.plates.is_empty() {
+            // only wiremom models plates
+            engine = Engine::Wiremom;
+        }
         self.ant = a;
         self.ant.engine = engine;
         self.calc = None;
@@ -749,6 +753,47 @@ impl App {
                 });
                 if let Some(i) = del {
                     self.ant.lines.remove(i);
+                }
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.heading("Plates");
+                if ui.button("➕ Add").clicked() {
+                    let l = self.ant.lambda() / 2.0;
+                    self.ant.plates.push(Plate::new([-l / 2.0, -l / 2.0, 0.0], [l, 0.0, 0.0], [0.0, l, 0.0]));
+                }
+                ui.label(RichText::new("flat conducting plates (reflectors, ground screens); a wire ending on a plate connects to it — wiremom engine").weak());
+            });
+            if !self.ant.plates.is_empty() {
+                let mut del = None;
+                egui::Grid::new("plates").striped(true).show(ui, |ui| {
+                    for h in ["Corner X, Y, Z (m)", "Edge 1 dX, dY, dZ (m)", "Edge 2 dX, dY, dZ (m)", "Divisions", ""] {
+                        ui.label(RichText::new(h).strong());
+                    }
+                    ui.end_row();
+                    for (i, p) in self.ant.plates.iter_mut().enumerate() {
+                        for v in [&mut p.corner, &mut p.edge1, &mut p.edge2] {
+                            ui.horizontal(|ui| {
+                                for c in v.iter_mut() {
+                                    ui.add(egui::DragValue::new(c).speed(0.01).max_decimals(4));
+                                }
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut p.n1).speed(0.2).range(0..=200));
+                            ui.label("×");
+                            ui.add(egui::DragValue::new(&mut p.n2).speed(0.2).range(0..=200));
+                        })
+                        .response
+                        .on_hover_text("Mesh cells along each edge; 0 = automatic (about λ/10)");
+                        if ui.small_button("🗑").clicked() {
+                            del = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+                if let Some(i) = del {
+                    self.ant.plates.remove(i);
                 }
             }
             ui.add_space(8.0);

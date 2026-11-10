@@ -813,6 +813,9 @@ pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) ->
     if !ant.lines.is_empty() {
         return Err("Transmission lines need the wiremom or NEC-2 engine (choose it under Calculate → Engine).".into());
     }
+    if !ant.plates.is_empty() {
+        return Err("Plates need the wiremom engine (choose it under Calculate → Engine).".into());
+    }
     let t0 = Instant::now();
     let mesh = build_mesh(ant, 299.792458 / seg_freq_mhz)?;
     let sol = solve(ant, &mesh, freq_mhz)?;

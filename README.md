@@ -18,6 +18,7 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 - **Tabs:** Geometry, 3D view (click a wire to zoom in, scale bar), Calculate, Far field plots (movable gain marker), 3D pattern (ARRL / dB / linear), Frequency sweep, Optimizer
 - **Modelling:** wire materials, lumped loads (R+jX, L/C/Q traps, series/parallel RLC), wire insulation (velocity factor), free / perfect / real ground, F/B rear range
 - **Transmission lines (wiremom and NEC-2 engines):** feed lines, phasing lines and stubs between any two places on wires, with impedance, length, velocity factor, loss and reversal; read from and written to NEC files (`TL` cards)
+- **Plates (wiremom engine):** flat conducting plates (reflectors, ground screens, car-body panels) meshed into triangles; a wire ending on a plate connects to it, so a monopole can be fed against a plate; read from and written to NEC files (`SM`/`SC` cards)
 - **Ground systems (wiremom engine):** wires may run below z = 0 over real ground — ground rods, buried radials and counterpoises are modelled in full, including the ground loss
 - **Convenience:** the last folder used for open/save is remembered
 

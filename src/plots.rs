@@ -555,6 +555,11 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
             painter.text(proj(at(w, 0.5)) + Vec2::new(4.0, -4.0), Align2::LEFT_BOTTOM, format!("{}", i + 1), FontId::proportional(10.0), Color32::from_rgb(90, 90, 120));
         }
     }
+    // plates: a translucent fill with their outline
+    for p in &ant.plates {
+        let c = p.corners().map(|v| proj([v[0], v[1], v[2] + dz]));
+        painter.add(egui::Shape::convex_polygon(c.to_vec(), Color32::from_rgba_unmultiplied(120, 150, 200, 60), Stroke::new(1.2, Color32::from_rgb(70, 100, 160))));
+    }
     // transmission lines: a dashed link between their ends
     for t in &ant.lines {
         if let (Some(wa), Some(wb)) = (ant.wires.get(t.a_wire), ant.wires.get(t.b_wire)) {

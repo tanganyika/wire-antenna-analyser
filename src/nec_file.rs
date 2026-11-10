@@ -195,6 +195,9 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
     let mut ld: Vec<(i64, i64, i64, i64, f64, f64, f64)> = Vec::new();
     let mut insul: HashMap<usize, (f64, f64)> = HashMap::new();
     let mut tl: Vec<(i64, i64, i64, i64, f64, f64, bool)> = Vec::new();
+    // plates: SM (or rectangular SP) gives corners 1 and 2, the next SC corner 3
+    let mut plates: Vec<Plate> = Vec::new();
+    let mut pending_plate: Option<([f64; 3], [f64; 3], usize, usize)> = None;
     // exact line values written by this program (NEC-2 TL can't hold them): index -> (vf, loss)
     let mut tl_extra: HashMap<usize, (f64, f64)> = HashMap::new();
     for (ln, raw) in text.lines().enumerate() {
@@ -365,6 +368,25 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
                 }
             }
             "LD" => ld.push((int(0)?, int(1)?, int(2)?, int(3)?, num(4)?, num(5)?, num(6)?)),
+            "SM" | "SP" => {
+                let (a, b) = ([num(2)?, num(3)?, num(4)?], [num(5)?, num(6)?, num(7)?]);
+                if card == "SM" {
+                    // 0 divisions = automatic meshing (the wiremom engine picks ~λ/10)
+                    pending_plate = Some((a, b, int(0)?.max(0) as usize, int(1)?.max(0) as usize));
+                } else if int(1)? == 1 {
+                    pending_plate = Some((a, b, 0, 0));
+                } else {
+                    warn.push(format!("line {}: SP patch of shape {} skipped (only rectangular plates)", ln + 1, int(1)?));
+                }
+            }
+            "SC" => {
+                if let Some((a, b, n1, n2)) = pending_plate.take() {
+                    let c = [num(2)?, num(3)?, num(4)?];
+                    let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                    let e2 = [c[0] - b[0], c[1] - b[1], c[2] - b[2]];
+                    plates.push(Plate { corner: a, edge1: e1, edge2: e2, n1, n2 });
+                }
+            }
             "TL" => {
                 let shunts = (6..10).map(num).collect::<Result<Vec<f64>, String>>()?;
                 tl.push((int(0)?, int(1)?, int(2)?, int(3)?, num(4)?, num(5)?, shunts.iter().any(|y| *y != 0.0)));
@@ -494,6 +516,7 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
             _ => warn.push(format!("load type LD {ty} skipped")),
         }
     }
+    ant.plates = plates;
     ant.lines.clear();
     for (i, &(t1, s1, t2, s2, z0, len, shunts)) in tl.iter().enumerate() {
         match (locate(t1, s1), locate(t2, s2)) {
@@ -614,6 +637,14 @@ pub fn write(ant: &Antenna) -> String {
         let v = num_complex::Complex64::from_polar(s.volts, s.phase_deg.to_radians());
         o += &format!("EX 0 {} {} 0 {} {}\n", s.wire + 1, seg_of(s.wire, s.pos), n(v.re), n(v.im));
     }
+    for p in &ant.plates {
+        // NEC-2 would treat these patches as part of a closed surface
+        let c = p.corners();
+        let lift = |v: [f64; 3]| [v[0], v[1], v[2] + dz];
+        let (a, b, d) = (lift(c[0]), lift(c[1]), lift(c[2]));
+        o += &format!("SM {} {} {} {} {} {} {} {}\n", p.n1, p.n2, n(a[0]), n(a[1]), n(a[2]), n(b[0]), n(b[1]), n(b[2]));
+        o += &format!("SC 0 0 {} {} {}\n", n(d[0]), n(d[1]), n(d[2]));
+    }
     for t in &ant.lines {
         if t.a_wire >= ant.wires.len() || t.b_wire >= ant.wires.len() {
             continue;
@@ -632,6 +663,15 @@ pub fn write(ant: &Antenna) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plates_round_trip() {
+        let mut a = Antenna::example(0);
+        a.plates.push(Plate { corner: [-1.0, -2.0, 3.0], edge1: [2.0, 0.0, 0.0], edge2: [0.0, 4.0, 0.5], n1: 6, n2: 8 });
+        let text = write(&a);
+        let back = parse(&text, "x").unwrap();
+        assert_eq!(back.ant.plates, a.plates, "{text}");
+    }
 
     #[test]
     fn transmission_lines_round_trip() {
