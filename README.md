@@ -87,9 +87,16 @@ These are the weaker spots, with how far they have been checked.
 - **Wires that stop on the surface of real ground** with nothing below it (no rod
   or radials) use a perfect-ground stand-in for the currents. A point contact into
   lossy earth can't be modelled. The warning suggests adding a rod or radials.
-- **Speed with buried wires:** the air-to-ground couplings are computed directly,
-  not tabulated. A vertical with 8 buried radials takes about 1.4 s per frequency,
-  so sweeps of such models are slow.
+- **Speed:**
+  - **Buried wires:** the air-to-ground couplings are computed directly, not
+    tabulated. A vertical with 8 buried radials takes about 0.8 s per frequency,
+    so sweeps of such models are slow.
+  - **Everything else:** for the 3-element Yagi (24-point sweep with gain and
+    F/B, 12 threads), wiremom takes about 110 ms in free space, against 90 ms for
+    MININEC and 170 ms for NEC-2. On perfect ground all three take about
+    130 ms. Over real ground wiremom takes 350 ms, NEC-2 210 ms, and MININEC
+    130 ms (but MININEC doesn't put real ground into the currents). A single
+    calculation is faster with wiremom than with NEC-2 in every case.
 - **Plates:** flat parallelograms only, above the ground (not in it). Large
   plates grow the problem quickly; a 1 m plate at 144 MHz is fine, but meshes of
   thousands of triangles take seconds.

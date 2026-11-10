@@ -12,7 +12,7 @@ use std::time::Instant;
 use wiremom::{Conductor, Ground as WGround, LoadKind, Model, Port, RealGround, Segments, Surface, TwoPortKind};
 
 /// Sommerfeld tables shared by every calculation, so a sweep or an optimizer run
-/// builds each table once (tables are reused within ±1 % of their frequency).
+/// builds each table once (sweeps blend the tables of neighbouring frequencies).
 static TABLES: LazyLock<wiremom::TableCache> = LazyLock::new(Default::default);
 
 /// Shown when wires stop at the surface of real ground with nothing below it.  A
@@ -93,7 +93,6 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<(Model, Vec<us
     let mut m = Model::new(wires, ground);
     m.surfaces = surfaces;
     m.tables = TABLES.clone();
-    m.ground_table_reuse = 0.01;
     let mesh = m.mesh().map_err(String::from)?;
     let wire_of = |w: usize, what: &str| index.get(w).copied().flatten().ok_or_else(|| format!("{what} is on wire {}, which has no length or radius", w + 1));
     for s in &ant.sources {
