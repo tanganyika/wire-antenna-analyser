@@ -404,6 +404,10 @@ fn result(ant: &Antenna, freq_mhz: f64, lay: &Layout, rep: &Report, need_far: bo
     (r, pts)
 }
 
+/// NEC-2 cannot model current flowing from a wire into lossy ground: its impedance is
+/// meaningless then (259 − j232 Ω for a quarter-wave vertical on average ground).
+pub const NEC2_GROUND_CONNECTED: &str = "Wires connect to the real ground: NEC-2 cannot model a connection into lossy ground, so its impedance and gain are not reliable. Use perfect ground, raise the wires above the ground, or use the MININEC or wiremom engine.";
+
 /// Impedance (and, with `need_far`, gain and F/B from a 3° grid) at one frequency.
 pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) -> Result<CalcResult, String> {
     let t = Instant::now();
@@ -493,7 +497,10 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
         }
     }
     let mesh = mom::build_mesh(ant, ant.lambda())?;
-    let warnings = mesh.warnings.clone();
+    let mut warnings = mesh.warnings.clone();
+    if crate::wm::touches_ground(ant) {
+        warnings.push(NEC2_GROUND_CONNECTED.to_string());
+    }
     Ok(FullResult {
         result: res.clone(),
         patterns: Patterns {
