@@ -12,7 +12,7 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 
 - **Three engines**
   - built-in multi-threaded MININEC-style solver (the method MMANA uses)
-  - built-in multi-threaded **wiremom** solver ([../wiremom](../wiremom)): MPIE with triangle currents and Galerkin testing, perfect or Sommerfeld real ground, all in-process; sweeps share Sommerfeld tables
+  - built-in multi-threaded **wiremom** solver ([wiremom](https://github.com/tanganyika/wiremom)): MPIE with triangle currents and Galerkin testing, perfect or Sommerfeld real ground, all in-process; sweeps share Sommerfeld tables
   - bundled public-domain NEC-2 (`nec2c`) with Sommerfeld-Norton real ground; sweeps run many NEC-2 processes in parallel
 - **Files:** open and save MMANA `.maa` (English and Russian headings), NEC `.nec` (including 4nec2 `SY` symbols, helices, arcs, GM/GR/GX), and EZNEC `.ez`
 - **Tabs:** Geometry, 3D view (click a wire to zoom in, scale bar), Calculate, Far field plots (movable gain marker), 3D pattern (ARRL / dB / linear), Frequency sweep, Optimizer
@@ -21,9 +21,10 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 
 ## Install on Linux
 
-You need Rust (<https://rustup.rs>), a C compiler (`sudo apt install build-essential` on
-Debian/Ubuntu/Zorin), and the [wiremom](../wiremom) crate checked out next to this folder
-(`../wiremom`). Then:
+You need Rust (<https://rustup.rs>) and a C compiler (`sudo apt install build-essential` on
+Debian/Ubuntu/Zorin). Cargo fetches the wiremom engine from
+<https://github.com/tanganyika/wiremom> at the commit pinned in `Cargo.lock`; while that
+repository is private, your git needs access to it (for example `gh auth setup-git`). Then:
 
 ```sh
 ./install.sh        # builds if needed, installs to ~/.local (menu entry, icon, file types)
@@ -46,13 +47,27 @@ window and exits (used for automated checks).
 |---|---|
 | `src/mom.rs` | built-in solver (segmentation, matrix fill, LU, far field, sweeps) |
 | `src/nec.rs` | NEC-2 engine bridge (deck writer, report parser) |
-| `src/wm.rs` | wiremom engine bridge (antenna → wiremom model, results → shared result types) |
+| `src/wm.rs` | wiremom engine bridge (antenna → wiremom model, results → shared result types); the engine itself is the [wiremom](https://github.com/tanganyika/wiremom) crate |
 | `nec2c/`, `build.rs` | bundled nec2c 1.3.1 source (public domain) and its build |
 | `src/maa.rs`, `src/nec_file.rs`, `src/ez.rs` | file formats |
 | `src/optimize.rs` | optimizer |
 | `src/app.rs`, `src/plots.rs` | user interface and plots |
 | `MECHANICS.md`, `mechanics.json` | where each formula and value came from |
 | `tools/cc.sh` | C compiler/linker helper (falls back to `zig cc` when no `cc` exists) |
+
+## Working on the wiremom engine at the same time
+
+To build against a local wiremom checkout (`../wiremom`) instead of the pinned GitHub
+commit, create `.cargo/config.toml` (git-ignored) containing:
+
+```toml
+[patch."https://github.com/tanganyika/wiremom"]
+wiremom = { path = "../wiremom" }
+```
+
+While that is in place Cargo rewrites `Cargo.lock` without the pinned commit, so don't
+commit `Cargo.lock` then. When the engine change is done: push wiremom, delete the file,
+and run `cargo update -p wiremom` to pin the new commit.
 
 `cargo test --release` runs the tests (solver accuracy, file round trips, NEC-2 agreement).
 
