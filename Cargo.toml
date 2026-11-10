@@ -2,6 +2,9 @@
 name = "wireant"
 version = "0.1.0"
 edition = "2024"
+description = "Linux desktop program for modelling wire antennas (MININEC, wiremom and NEC-2 engines)"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/tanganyika/wire-antenna-analyser"
 
 [dependencies]
 eframe = "0.37.0"

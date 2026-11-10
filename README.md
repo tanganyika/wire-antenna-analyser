@@ -73,6 +73,21 @@ and run `cargo update -p wiremom` to pin the new commit.
 
 ## Credits
 
-- NEC-2: Lawrence Livermore National Laboratory (public domain); C translation `nec2c` by Neoklis Kyriazis (5B4AZ).
+- NEC-2: Lawrence Livermore National Laboratory (public domain); C translation `nec2c` by Neoklis Kyriazis (5B4AZ), bundled in `nec2c/` with its own README and COPYING.
+- The wiremom engine: [wiremom](https://github.com/tanganyika/wiremom), licensed MIT OR Apache-2.0.
 - The MININEC method: J. C. Logan and J. W. Rockway, Naval Ocean Systems Center.
 - The EZNEC file layout follows the notes collected by the open-source `ezparse` project (S. Falco and H. McGavran); no code from it is used.
+
+## License
+
+Copyright (C) 2026 tanganyika
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version. See [LICENSE](LICENSE).
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+The bundled `nec2c` source keeps its own terms (public domain, per its README), and the wiremom
+engine is MIT OR Apache-2.0; both may be distributed as part of this GPL program.
