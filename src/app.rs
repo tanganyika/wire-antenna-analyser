@@ -611,10 +611,12 @@ impl App {
                 if self.tools.report.is_none() {
                     missing.push("resonance finder not run");
                 }
+                let opened = open_in_viewer(&p);
                 self.status = format!(
-                    "Report saved to {}{}",
+                    "Report saved to {}{}{}",
                     p.display(),
-                    if missing.is_empty() { String::new() } else { format!(" ({})", missing.join(", ")) }
+                    if missing.is_empty() { String::new() } else { format!(" ({})", missing.join(", ")) },
+                    if opened { "" } else { "; couldn't open a PDF viewer" }
                 );
             }
             Err(e) => self.error = Some(format!("Couldn't save the report to {}: {}", p.display(), e)),
@@ -1903,4 +1905,27 @@ impl eframe::App for App {
 /// including where the view is now.
 fn scroll_range(extent: f32, zoom: f32, pan: f32) -> f32 {
     (extent * zoom.max(1.0) * 1.5).max(pan.abs() * 1.2).max(50.0)
+}
+
+/// Open a file in the desktop's default application, without waiting for it.
+fn open_in_viewer(p: &std::path::Path) -> bool {
+    use std::process::{Command, Stdio};
+    let mut c = if cfg!(target_os = "windows") {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    } else if cfg!(target_os = "macos") {
+        Command::new("open")
+    } else {
+        Command::new("xdg-open")
+    };
+    c.arg(p).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    match c.spawn() {
+        Ok(mut child) => {
+            // reap the launcher when it exits so it doesn't linger as a zombie
+            std::thread::spawn(move || child.wait());
+            true
+        }
+        Err(_) => false,
+    }
 }

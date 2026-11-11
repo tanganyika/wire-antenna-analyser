@@ -98,6 +98,7 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
     The save dialog suggests the antenna file's name with `.pdf` in its folder,
     or `untitled.pdf` in the last folder used. The PDF is written directly, with
     vector plots and standard PDF fonts, so nothing else needs installing.
+    Once saved, the report opens in the default PDF viewer.
 - **Convenience:** the last folder used for open/save is remembered.
 
 ## Engines compared
