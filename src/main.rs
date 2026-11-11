@@ -9,6 +9,8 @@ mod ez;
 mod optimize;
 mod plots;
 mod tools;
+mod pdf;
+mod report;
 
 use std::path::PathBuf;
 

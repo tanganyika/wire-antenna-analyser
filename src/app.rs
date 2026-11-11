@@ -111,6 +111,34 @@ fn settings_path() -> Option<PathBuf> {
     Some(base.join("wireant").join("settings.txt"))
 }
 
+/// Where the report's save dialog starts: the antenna file's folder and name with
+/// .pdf, or "untitled.pdf" in the last folder used for a new antenna.
+fn report_target(file: Option<&std::path::Path>, last_dir: Option<&std::path::Path>) -> (Option<PathBuf>, String) {
+    match file {
+        Some(p) => (
+            p.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.to_path_buf()).or_else(|| last_dir.map(|d| d.to_path_buf())),
+            format!("{}.pdf", p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "untitled".into())),
+        ),
+        None => (last_dir.map(|d| d.to_path_buf()), "untitled.pdf".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod report_target_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn next_to_the_antenna_file_or_untitled_in_the_last_folder() {
+        let (d, n) = report_target(Some(Path::new("/home/x/Antennas/40M Tower.maa")), Some(Path::new("/tmp")));
+        assert_eq!((d.unwrap(), n.as_str()), (PathBuf::from("/home/x/Antennas"), "40M Tower.pdf"));
+        let (d, n) = report_target(None, Some(Path::new("/home/x/last")));
+        assert_eq!((d.unwrap(), n.as_str()), (PathBuf::from("/home/x/last"), "untitled.pdf"));
+        let (d, n) = report_target(None, None);
+        assert_eq!((d, n.as_str()), (None, "untitled.pdf"));
+    }
+}
+
 fn load_last_dir() -> Option<PathBuf> {
     let text = std::fs::read_to_string(settings_path()?).ok()?;
     text.lines()
@@ -539,6 +567,15 @@ impl App {
                     self.tools.match_open = true;
                     ui.close();
                 }
+                ui.separator();
+                if ui
+                    .button("Antenna report (PDF)…")
+                    .on_hover_text("The antenna, the Calculate tab's results and patterns, and the resonance finder's and match calculator's results")
+                    .clicked()
+                {
+                    ui.close();
+                    self.save_report();
+                }
             });
             ui.menu_button("Help", |ui| {
                 ui.label("Wire antenna analyser for Linux.");
@@ -550,6 +587,37 @@ impl App {
                 ui.selectable_value(&mut self.tab, t, t.label());
             }
         });
+    }
+
+    /// Asks where to save the PDF report (next to the antenna file with its name, or
+    /// "untitled.pdf" in the last folder used) and writes it.
+    fn save_report(&mut self) {
+        let (dir, name) = report_target(self.path.as_deref(), self.last_dir.as_deref());
+        let mut d = rfd::FileDialog::new().set_title("Save antenna report").add_filter("PDF files (.pdf)", &["pdf", "PDF"]).set_file_name(name);
+        if let Some(dir) = dir.filter(|d| d.is_dir()) {
+            d = d.set_directory(dir);
+        }
+        let Some(p) = d.save_file() else { return };
+        let p = if p.extension().is_none() { p.with_extension("pdf") } else { p };
+        let bytes = crate::report::build(&self.ant, self.path.as_deref(), self.calc.as_ref(), &self.history, &self.tools);
+        match std::fs::write(&p, bytes) {
+            Ok(()) => {
+                self.remember_dir(&p);
+                let mut missing = vec![];
+                if self.calc.is_none() {
+                    missing.push("no calculation");
+                }
+                if self.tools.report.is_none() {
+                    missing.push("resonance finder not run");
+                }
+                self.status = format!(
+                    "Report saved to {}{}",
+                    p.display(),
+                    if missing.is_empty() { String::new() } else { format!(" ({})", missing.join(", ")) }
+                );
+            }
+            Err(e) => self.error = Some(format!("Couldn't save the report to {}: {}", p.display(), e)),
+        }
     }
 
     /// The match calculator's load from the last calculation, if there is one.

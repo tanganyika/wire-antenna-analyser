@@ -88,7 +88,7 @@ fn scale_radius(rel_db: f64, scale: Scale3D, min_db: f64) -> f32 {
 }
 
 /// ARRL-style logarithmic radius for a gain `rel_db` (<= 0) below the maximum.
-fn radius_frac(rel_db: f64) -> f32 {
+pub(crate) fn radius_frac(rel_db: f64) -> f32 {
     let r = 0.89f64.powf(-rel_db / 2.0);
     r.clamp(0.0, 1.0) as f32
 }
@@ -243,7 +243,7 @@ pub struct Series<'a> {
     pub right: bool,
 }
 
-fn nice_range(lo: f64, hi: f64) -> (f64, f64, f64) {
+pub(crate) fn nice_range(lo: f64, hi: f64) -> (f64, f64, f64) {
     let (mut lo, mut hi) = (lo, hi);
     // a flat series (equal to within rounding, e.g. F/B of a dipole) gets a ±1 range;
     // a step below the values' resolution would never advance the tick loops
@@ -260,7 +260,7 @@ fn nice_range(lo: f64, hi: f64) -> (f64, f64, f64) {
 
 /// Tick values a, a+step, … up to b, counted rather than accumulated (so a step
 /// that is tiny next to the values can't stall), at most 200 of them.
-fn ticks(a: f64, b: f64, step: f64) -> impl Iterator<Item = f64> {
+pub(crate) fn ticks(a: f64, b: f64, step: f64) -> impl Iterator<Item = f64> {
     let n = if step > 0.0 && b >= a { (((b - a) / step) + 1e-9).floor().min(200.0) as usize } else { 0 };
     (0..=n).map(move |i| a + i as f64 * step)
 }
