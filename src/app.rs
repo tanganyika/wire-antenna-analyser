@@ -510,9 +510,7 @@ impl App {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.button("New").clicked() {
-                    let mut a = Antenna::example(0);
-                    a.name = "New antenna".into();
-                    self.set_antenna(a);
+                    self.set_antenna(Antenna::blank());
                     self.path = None;
                 }
                 if ui.button("Open…").clicked() {

@@ -637,3 +637,27 @@ mod tests {
         assert!(s.len() == 20 && s.ends_with("UTC") && s.starts_with("20"), "{s}");
     }
 }
+
+#[cfg(test)]
+mod blank_tests {
+    use super::*;
+
+    #[test]
+    fn a_new_antenna_is_empty_and_nothing_breaks_on_it() {
+        let a = Antenna::blank();
+        assert!(a.wires.is_empty() && a.sources.is_empty() && a.loads.is_empty());
+        // calculations refuse politely, on every engine
+        for e in [Engine::Wiremom, Engine::Mininec, Engine::Nec2] {
+            let mut b = a.clone();
+            b.engine = e;
+            assert!(crate::mom::calculate(&b).is_err(), "{e:?}");
+            assert!(crate::mom::sweep(&b, 14.0, 14.3, 5, false).is_err(), "{e:?}");
+            assert!(tools::find(&b, 14.0, 14.3, 5, 2.0).is_err(), "{e:?}");
+        }
+        // report and the file formats cope
+        assert!(build(&a, None, None, &[], &ToolsState::default()).starts_with(b"%PDF"));
+        let _ = crate::maa::write(&a);
+        let _ = crate::nec_file::write(&a);
+        let _ = crate::ez::write(&a);
+    }
+}

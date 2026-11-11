@@ -462,6 +462,22 @@ impl Antenna {
         ]
     }
 
+    /// A new, empty antenna: no wires, sources or loads; free space, copper wire,
+    /// 14.15 MHz until the user sets the frequency.
+    pub fn blank() -> Antenna {
+        let mut a = Antenna::example(0);
+        a.name = "New antenna".into();
+        a.wires.clear();
+        a.sources.clear();
+        a.loads.clear();
+        a.lines.clear();
+        a.plates.clear();
+        a.comment.clear();
+        a.ground = Ground { kind: GroundKind::Free, eps_r: 13.0, sigma_ms: 5.0, add_height: 0.0, second: SecondMedium::default() };
+        a.material = Material::CuWire;
+        a
+    }
+
     pub fn example(i: usize) -> Antenna {
         let real = |h: f64| Ground { kind: GroundKind::Real, eps_r: 13.0, sigma_ms: 5.0, add_height: h, second: SecondMedium::default() };
         let base = |name: &str, f: f64| Antenna {

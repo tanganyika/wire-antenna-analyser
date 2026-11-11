@@ -498,7 +498,7 @@ pub fn view3d(ui: &mut egui::Ui, size: Vec2, ant: &Antenna, calc: Option<&FullRe
     let pts: Vec<[f64; 3]> = ant.wires.iter().flat_map(|w| [w.p1, w.p2]).map(|p| [p[0], p[1], p[2] + dz]).collect();
     if pts.is_empty() {
         if !st.draw {
-            painter.text(rect.center(), Align2::CENTER_CENTER, "No wires", FontId::proportional(14.0), Color32::GRAY);
+            painter.text(rect.center(), Align2::CENTER_CENTER, "No wires yet: turn on ✏ Draw wires above, or add them on the Geometry tab", FontId::proportional(14.0), Color32::GRAY);
             return edits;
         }
     }
