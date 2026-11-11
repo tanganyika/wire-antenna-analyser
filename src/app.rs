@@ -165,7 +165,7 @@ impl App {
         cc.egui_ctx.set_visuals(egui::Visuals::light());
         let max_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         let mut app = App {
-            ant: Antenna::example(2),
+            ant: Antenna::blank(),
             path: None,
             tab: tab.unwrap_or(Tab::Geometry),
             threads: max_threads,
@@ -230,6 +230,8 @@ impl App {
         }
         app.reset_sweep_band();
         app.default_opt_vars();
+        let ant = app.ant.clone();
+        app.tools.for_antenna(&ant);
         if app.shot.is_some() {
             // screenshot mode: compute synchronously so the picture shows real results
             let p = pool(app.threads);
