@@ -72,7 +72,7 @@ impl Default for ToolsState {
             res_open: false,
             res_f0: 0.0,
             res_f1: 0.0,
-            res_steps: 101,
+            res_steps: 31,
             res_limit: 2.0,
             report: None,
             sel: 0,
@@ -436,54 +436,77 @@ pub fn analyse(pts: Vec<(f64, C)>, z0: f64, limit: f64, mut z_at: impl FnMut(f64
         ps.push((f, z));
         ps.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         let r_res = z.re.max(1e-9);
-        res.push(Resonance {
-            f_mhz: f,
-            z,
-            series,
-            swr: swr(z, z0),
-            bw_ref: band(&ps, f, |z| swr(z, z0) <= limit),
-            bw_matched: band(&ps, f, |z| swr(z, r_res) <= limit),
-            q,
-        });
+        let bw_ref = refine_band(&ps, f, |z| swr(z, z0), limit, &mut z_at)?;
+        let bw_matched = refine_band(&ps, f, |z| swr(z, r_res), limit, &mut z_at)?;
+        res.push(Resonance { f_mhz: f, z, series, swr: swr(z, z0), bw_ref, bw_matched, q });
     }
     Ok(ResonanceReport { resonances: res, points: pts, min_swr, z0, limit })
 }
 
-/// The band around `f` (MHz) where `ok(Z)` holds, from samples with Z
-/// interpolated linearly between them; None if it doesn't hold at `f`.
-fn band(ps: &[(f64, C)], f: f64, ok: impl Fn(C) -> bool) -> Option<(f64, f64)> {
-    let i = ps.iter().position(|p| p.0 == f)?;
-    if !ok(ps[i].1) {
-        return None;
+/// The band around `f` (MHz) where `metric(Z) <= limit`: the samples bracket each
+/// edge, which is then found with a few solves (regula falsi, starting from Z
+/// interpolated linearly between the bracketing samples), so the edges are
+/// accurate even when the band is narrower than the sample spacing.  None if the
+/// limit isn't met at `f`; an edge beyond the swept range is the range's end.
+fn refine_band(
+    ps: &[(f64, C)],
+    f: f64,
+    metric: impl Fn(C) -> f64,
+    limit: f64,
+    z_at: &mut impl FnMut(f64) -> Result<C, String>,
+) -> Result<Option<(f64, f64)>, String> {
+    let Some(i) = ps.iter().position(|p| p.0 == f) else { return Ok(None) };
+    if metric(ps[i].1) > limit {
+        return Ok(None);
     }
-    let edge = |a: (f64, C), b: (f64, C)| {
-        // a satisfies, b doesn't: bisect along the straight line in Z
+    let g = |z: C| metric(z) - limit;
+    let mut edge = |a: (f64, C), b: (f64, C)| -> Result<f64, String> {
+        // a inside (g <= 0), b outside: first guess along the straight line in Z
         let (mut lo, mut hi) = (0.0, 1.0);
         for _ in 0..40 {
             let t = 0.5 * (lo + hi);
-            if ok(a.1 + (b.1 - a.1) * t) {
+            if g(a.1 + (b.1 - a.1) * t) <= 0.0 {
                 lo = t;
             } else {
                 hi = t;
             }
         }
-        a.0 + (b.0 - a.0) * lo
+        let (mut fa, mut ga, mut fb, mut gb) = (a.0, g(a.1), b.0, g(b.1));
+        let mut x = a.0 + (b.0 - a.0) * lo;
+        for _ in 0..5 {
+            let gx = g(z_at(x)?);
+            if gx.abs() < 1e-3 {
+                return Ok(x);
+            }
+            if gx <= 0.0 {
+                fa = x;
+                ga = gx;
+            } else {
+                fb = x;
+                gb = gx;
+            }
+            if (fb - fa).abs() < 2e-6 * f {
+                break;
+            }
+            x = fa + (fb - fa) * (ga / (ga - gb)).clamp(0.05, 0.95);
+        }
+        Ok(x)
     };
     let mut lo = ps[0].0;
     for k in (0..i).rev() {
-        if !ok(ps[k].1) {
-            lo = edge(ps[k + 1], ps[k]);
+        if g(ps[k].1) > 0.0 {
+            lo = edge(ps[k + 1], ps[k])?;
             break;
         }
     }
     let mut hi = ps[ps.len() - 1].0;
     for k in i + 1..ps.len() {
-        if !ok(ps[k].1) {
-            hi = edge(ps[k - 1], ps[k]);
+        if g(ps[k].1) > 0.0 {
+            hi = edge(ps[k - 1], ps[k])?;
             break;
         }
     }
-    Some((lo, hi))
+    Ok(Some((lo, hi)))
 }
 
 // ------------------------------------------------------------------ matching
@@ -699,6 +722,26 @@ mod tests {
     }
 
     #[test]
+    fn narrow_band_between_samples_is_found_by_solving() {
+        // Q 200: the 2:1 band (50 kHz) is narrower than the 100 kHz sample spacing
+        let hq = |f_mhz: f64| {
+            let (r, f0, q) = (50.0, 14.0, 200.0);
+            let l = q * r / (2.0 * PI * f0 * 1e6);
+            let c = 1.0 / ((2.0 * PI * f0 * 1e6).powi(2) * l);
+            let w = 2.0 * PI * f_mhz * 1e6;
+            C::new(r, w * l - 1.0 / (w * c))
+        };
+        let pts: Vec<(f64, C)> = (0..21).map(|i| 13.0 + 0.1 * i as f64).map(|f| (f, hq(f))).collect();
+        let mut solves = 0;
+        let rep = analyse(pts, 50.0, 2.0, |f| { solves += 1; Ok(hq(f)) }).unwrap();
+        let r = &rep.resonances[0];
+        let (lo, hi) = r.bw_ref.unwrap();
+        let want = 14.0 / 2f64.sqrt() / 200.0;
+        assert!(((hi - lo) - want).abs() < 0.01 * want, "{} vs {want}", hi - lo);
+        assert!(solves < 40, "{solves}");
+    }
+
+    #[test]
     fn parallel_resonance_is_found_too() {
         // the dual of the series circuit: Z = 2500 * 50 / Z_series, 2500 ohm at resonance
         let par = |f: f64| C::new(2500.0 * 50.0, 0.0) / rlc(f);
@@ -764,3 +807,4 @@ mod tests {
         }
     }
 }
+

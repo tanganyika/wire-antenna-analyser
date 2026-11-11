@@ -69,8 +69,11 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
   ground where each ray reflects. The View tab draws the boundary in blue. Ground
   presets fill in typical εr and σ.
 - **Tools menu:**
-  - **Resonance finder:** sweeps a range on all cores, finds every reactance
-    zero, and refines each with a few extra solves. For each resonance it shows
+  - **Resonance finder:** sweeps a range on all cores (31 points by default),
+    finds every reactance zero, and refines each with a few extra solves. The
+    bandwidth edges are found by solving too, so they're accurate even when the
+    band is narrower than the point spacing. Large models take a while: about
+    one second per solve at 1,350 unknowns, so about a minute for a search. For each resonance it shows
     the type (series or parallel), R, SWR, the SWR bandwidth against the
     reference impedance, the bandwidth once matched to its own resistance, and Q
     (f·|dZ/df| / 2R). Plots of SWR and R/jX are included. "Use frequency" sets
