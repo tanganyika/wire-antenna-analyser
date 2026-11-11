@@ -192,7 +192,7 @@ The NEC-2 engine is inside the program on all three systems. Settings are kept i
 
 To make the packages, push a version tag (`git tag v0.2.0 && git push --tags`): the Build
 workflow then tests on all three systems and attaches the packages to a GitHub release.
-Ordinary pushes test and package on Linux only, to save Actions minutes; to build the
+Ordinary pushes test and package on Linux only, for quick results; to build the
 Windows and macOS packages without a release, use Actions → Build → **Run workflow**.
 
 ## Install on Linux

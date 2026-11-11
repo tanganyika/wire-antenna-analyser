@@ -2,8 +2,7 @@
 #
 # Linux: tests and a package on every push to main and every pull request.
 # Windows and macOS: only for a version tag (v*) or when run by hand (Actions tab ->
-# Build -> Run workflow), as their runners use up a private repository's free
-# Actions minutes 2x (Windows) and 10x (macOS) faster than Linux.
+# Build -> Run workflow), as the Windows build takes about 15 minutes.
 # A version tag also makes a GitHub release with all three packages.
 name: Build
 
