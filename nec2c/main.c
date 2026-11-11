@@ -80,10 +80,20 @@ int main( int argc, char **argv )
   int option;
 
   /*** signal handler related code ***/
+#ifndef _WIN32
   /* new and old actions for sigaction() */
   struct sigaction sa_new, sa_old;
+#endif
 
 
+#ifdef _WIN32
+  /* wireant: no sigaction() on Windows */
+  signal( SIGINT,  sig_handler );
+  signal( SIGSEGV, sig_handler );
+  signal( SIGFPE,  sig_handler );
+  signal( SIGTERM, sig_handler );
+  signal( SIGABRT, sig_handler );
+#else
   /* initialize new actions */
   sa_new.sa_handler = sig_handler;
   sigemptyset( &sa_new.sa_mask );
@@ -95,6 +105,7 @@ int main( int argc, char **argv )
   sigaction( SIGFPE,  &sa_new, 0 );
   sigaction( SIGTERM, &sa_new, 0 );
   sigaction( SIGABRT, &sa_new, 0 );
+#endif
 
   /*** command line arguments handler ***/
   if( argc == 1 )

@@ -207,7 +207,8 @@ window and exits (used for automated checks).
 | `src/optimize.rs` | optimizer |
 | `src/app.rs`, `src/plots.rs` | user interface and plots |
 | `MECHANICS.md`, `mechanics.json` | where each formula and value came from |
-| `tools/cc.sh` | C compiler/linker helper (falls back to `zig cc` when no `cc` exists) |
+| `tools/cc.sh` | optional C compiler for nec2c (`NEC2C_CC=tools/cc.sh`; falls back to `zig cc` when no `cc` exists) |
+| `.github/workflows/build.yml`, `packaging/` | CI and the Linux, Windows and macOS packages |
 
 ## Working on the wiremom engine at the same time
 

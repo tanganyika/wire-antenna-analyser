@@ -1,0 +1,130 @@
+# Tests and packages.
+#
+# Linux: tests and a package on every push to master and every pull request.
+# Windows and macOS: only for a version tag (v*) or when run by hand (Actions tab ->
+# Build -> Run workflow), as their runners use up a private repository's free
+# Actions minutes 2x (Windows) and 10x (macOS) faster than Linux.
+# A version tag also makes a GitHub release with all three packages.
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # fail rather than ship without the NEC-2 engine
+  WIREANT_REQUIRE_NEC2: "1"
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release
+      - run: cargo build --release
+      - name: Package
+        run: |
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          D=wireant-$VER-linux-x86_64
+          mkdir -p $D/target/release
+          cp target/release/wireant $D/target/release/
+          cp -r install.sh uninstall.sh packaging README.md LICENSE $D/
+          tar czf $D.tar.gz $D
+          echo "PKG=$D.tar.gz" >> $GITHUB_ENV
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: ${{ env.PKG }}
+
+  windows:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: MinGW gcc (for NEC-2)
+        shell: bash
+        run: |
+          if ! command -v gcc; then
+            choco install mingw -y --no-progress
+            echo "C:/ProgramData/mingw64/mingw64/bin" >> $GITHUB_PATH
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: gcc --version
+      - run: cargo test --release
+      - run: cargo build --release
+      - name: Package
+        shell: bash
+        run: |
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          D=wireant-$VER-windows-x64
+          mkdir $D
+          cp target/release/wireant.exe README.md LICENSE $D/
+          7z a -tzip $D.zip $D
+          echo "PKG=$D.zip" >> $GITHUB_ENV
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ${{ env.PKG }}
+
+  macos:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release
+      - run: cargo build --release --target aarch64-apple-darwin
+      - run: cargo build --release --target x86_64-apple-darwin
+      - name: Package (universal .app in a .dmg)
+        run: |
+          VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          APP="dist/Wire Antenna Analyser.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          lipo -create -output "$APP/Contents/MacOS/wireant" \
+            target/aarch64-apple-darwin/release/wireant target/x86_64-apple-darwin/release/wireant
+          sed "s/@VERSION@/$VER/" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
+          ICONSET=wireant.iconset
+          mkdir $ICONSET
+          for s in 16 32 128 256 512; do
+            sips -z $s $s packaging/wireant-1024.png --out $ICONSET/icon_${s}x${s}.png >/dev/null
+            sips -z $((s*2)) $((s*2)) packaging/wireant-1024.png --out $ICONSET/icon_${s}x${s}@2x.png >/dev/null
+          done
+          iconutil -c icns $ICONSET -o "$APP/Contents/Resources/wireant.icns"
+          # ad-hoc signature (not notarised: first launch needs right-click -> Open)
+          codesign --force --deep -s - "$APP"
+          cp README.md LICENSE dist/
+          ln -s /Applications dist/Applications
+          hdiutil create -volname "Wire Antenna Analyser" -srcfolder dist -ov -format UDZO wireant-$VER-macos-universal.dmg
+          echo "PKG=wireant-$VER-macos-universal.dmg" >> $GITHUB_ENV
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: ${{ env.PKG }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*
+          generate_release_notes: true

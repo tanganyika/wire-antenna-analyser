@@ -21,16 +21,14 @@ fn binary() -> Result<PathBuf, String> {
         if NEC2C.is_empty() {
             return Err("The NEC-2 engine wasn't built into this copy of the program.".into());
         }
-        let base = std::env::var_os("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-            .unwrap_or_else(std::env::temp_dir);
+        // ~/.cache, %LOCALAPPDATA%, ~/Library/Caches
+        let base = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
         let mut h: u64 = 1469598103934665603;
         for b in NEC2C.iter().step_by(97) {
             h = (h ^ *b as u64).wrapping_mul(1099511628211);
         }
         let dir = base.join("wireant");
-        let path = dir.join(format!("nec2c-{:x}-{}", h, NEC2C.len()));
+        let path = dir.join(format!("nec2c-{:x}-{}{}", h, NEC2C.len(), std::env::consts::EXE_SUFFIX));
         if std::fs::metadata(&path).map(|m| m.len() as usize == NEC2C.len()).unwrap_or(false) {
             return Ok(path);
         }
@@ -292,11 +290,16 @@ fn run(deck: &str) -> Result<String, String> {
     let inp = dir.join("in.nec");
     let out = dir.join("out.txt");
     std::fs::write(&inp, deck).map_err(|e| e.to_string())?;
-    let res = std::process::Command::new(&bin)
-        .arg(format!("-i{}", inp.display()))
-        .arg(format!("-o{}", out.display()))
-        .stdin(std::process::Stdio::null())
-        .output();
+    // nec2c takes file names of at most 75 characters, so run it in the folder
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.current_dir(&dir).arg("-iin.nec").arg("-oout.txt").stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        // don't flash a console window for each calculation
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let res = cmd.output();
     let text = std::fs::read_to_string(&out).unwrap_or_default();
     let _ = std::fs::remove_file(&inp);
     let _ = std::fs::remove_file(&out);

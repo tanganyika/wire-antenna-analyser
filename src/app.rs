@@ -105,9 +105,8 @@ pub struct App {
 
 /// Small settings file (remembers the last antenna folder between runs).
 fn settings_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    // ~/.config, %APPDATA%, ~/Library/Application Support
+    let base = dirs::config_dir()?;
     Some(base.join("wireant").join("settings.txt"))
 }
 

@@ -135,8 +135,10 @@ These are the original's own words for its controls, so they settle names and li
 NEC-5 (and NEC-4) are licensed by Lawrence Livermore National Laboratory and can't be downloaded
 freely, so the rebuild bundles the **public-domain NEC-2** engine instead: `nec2c` 1.3.1
 (Debian source `nec2c_1.3.1.orig.tar.bz2`; its README states "nec2c is Public Domain, same as the
-original FORTRAN source"). Source is in `nec2c/`; `build.rs` compiles it with `tools/cc.sh`
-and the program embeds the executable.
+original FORTRAN source"). Source is in `nec2c/`; `build.rs` compiles it with the target's C
+compiler (MinGW gcc on Windows, as MSVC lacks C99 complex numbers) and the program embeds the
+executable. Two small `#ifdef _WIN32` changes (`signal()` for `sigaction()`, `clock()` for
+`times()`) let it build on Windows.
 
 - Pick it under **Engine** on the Calculate or Frequency sweep tab; the optimizer uses the same choice.
 - Each calculation writes a NEC deck and runs nec2c as its own process; sweeps and optimizer trials

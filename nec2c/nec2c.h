@@ -12,7 +12,9 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/types.h>
+#ifndef _WIN32
 #include <sys/times.h>
+#endif
 
 #ifndef	TRUE
 #define	TRUE	1

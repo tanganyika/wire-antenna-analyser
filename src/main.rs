@@ -1,3 +1,6 @@
+// no console window behind the program on Windows
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod maa;
 mod model;
