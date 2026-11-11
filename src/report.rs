@@ -291,7 +291,201 @@ fn xy(pdf: &mut Pdf, x: f64, y: f64, w: f64, h: f64, title: &str, xlabel: &str, 
 }
 
 /// The whole report.
-pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, history: &[CalcResult], st: &ToolsState) -> Vec<u8> {
+/// The antenna as on the View tab (same viewing direction, wire numbers and
+/// current colours), fitted into the box (x, y, w, h).
+fn antenna_picture(pdf: &mut Pdf, x: f64, y: f64, w: f64, h: f64, ant: &Antenna, calc: Option<&FullResult>, view: &crate::plots::ViewState) {
+    let col = |c: eframe::egui::Color32| [c.r() as f64 / 255.0, c.g() as f64 / 255.0, c.b() as f64 / 255.0];
+    let grounded = ant.ground.kind != GroundKind::Free;
+    let dz = if grounded { ant.ground.add_height } else { 0.0 };
+    let world = |p: [f64; 3]| [p[0], p[1], p[2] + dz];
+    let pts: Vec<[f64; 3]> = ant.wires.iter().flat_map(|w| [world(w.p1), world(w.p2)]).collect();
+    pdf.polyline(&[(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)], 0.5, LIGHT, false);
+    if pts.is_empty() {
+        pdf.text_centre(x + w / 2.0, y + h / 2.0, 10.0, Font::Regular, GREY, "No wires");
+        return;
+    }
+    let (cy, sy, cp, sp) = ((view.yaw as f64).cos(), (view.yaw as f64).sin(), (view.pitch as f64).cos(), (view.pitch as f64).sin());
+    // projection without scale; screen y down
+    let raw = |p: [f64; 3]| {
+        let x1 = p[0] * cy - p[1] * sy;
+        let y1 = p[0] * sy + p[1] * cy;
+        (x1, -(p[2] * cp - y1 * sp))
+    };
+    let mut lo = [f64::MAX; 3];
+    let mut hi = [f64::MIN; 3];
+    for p in &pts {
+        for i in 0..3 {
+            lo[i] = lo[i].min(p[i]);
+            hi[i] = hi[i].max(p[i]);
+        }
+    }
+    if grounded {
+        lo[2] = lo[2].min(0.0);
+    }
+    let (mut u0, mut u1, mut v0, mut v1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for p in pts.iter().copied().chain(grounded.then_some([lo[0], lo[1], 0.0])).chain(grounded.then_some([hi[0], hi[1], 0.0])) {
+        let (u, v) = raw(p);
+        u0 = u0.min(u);
+        u1 = u1.max(u);
+        v0 = v0.min(v);
+        v1 = v1.max(v);
+    }
+    let pad = 24.0;
+    let span = (u1 - u0).max(v1 - v0).max(1e-6);
+    let sc = ((w - 2.0 * pad) / (u1 - u0).max(span * 1e-3)).min((h - 2.0 * pad) / (v1 - v0).max(span * 1e-3));
+    let (ox, oy) = (x + w / 2.0 - sc * (u0 + u1) / 2.0, y + h / 2.0 - sc * (v0 + v1) / 2.0);
+    let proj = |p: [f64; 3]| {
+        let (u, v) = raw(p);
+        (ox + sc * u, oy + sc * v)
+    };
+    pdf.clip_begin(x, y, w, h);
+    let ext = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt().max(1e-3);
+    let ctr = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    if grounded {
+        let g = ((hi[0] - lo[0]).max(hi[1] - lo[1]) * 0.75).max(ext * 0.25);
+        let gc = [0.75, 0.67, 0.51];
+        for i in 0..=8 {
+            let t = -g + 2.0 * g * i as f64 / 8.0;
+            pdf.line(proj([ctr[0] + t, ctr[1] - g, 0.0]), proj([ctr[0] + t, ctr[1] + g, 0.0]), 0.35, gc);
+            pdf.line(proj([ctr[0] - g, ctr[1] + t, 0.0]), proj([ctr[0] + g, ctr[1] + t, 0.0]), 0.35, gc);
+        }
+        let s2 = &ant.ground.second;
+        if s2.enabled {
+            let blue = [0.16, 0.43, 0.78];
+            if s2.circle {
+                let r = s2.distance.max(0.0);
+                let c: Vec<(f64, f64)> = (0..=96).map(|i| {
+                    let a = i as f64 * std::f64::consts::TAU / 96.0;
+                    proj([r * a.cos(), r * a.sin(), 0.0])
+                }).collect();
+                pdf.polyline(&c, 1.2, blue, false);
+            } else {
+                let b = s2.bearing_deg.to_radians();
+                let (nx, ny) = (b.cos(), b.sin());
+                let (px, py) = (s2.distance * nx, s2.distance * ny);
+                let l = (g + s2.distance.abs()) * 2.0;
+                pdf.line(proj([px - l * ny, py + l * nx, 0.0]), proj([px + l * ny, py - l * nx, 0.0]), 1.2, blue);
+                let tip = proj([px + g * 0.15 * nx, py + g * 0.15 * ny, 0.0]);
+                pdf.line(proj([px, py, 0.0]), tip, 1.2, blue);
+                pdf.text(tip.0 + 2.0, tip.1, 7.0, Font::Regular, blue, "second ground");
+            }
+        }
+    }
+    // axes
+    let al = ext * 0.12;
+    let o = [lo[0] - al * 0.6, lo[1] - al * 0.6, lo[2]];
+    for (i, (c, name)) in [([0.82, 0.16, 0.16], "X"), ([0.12, 0.59, 0.2], "Y"), ([0.16, 0.27, 0.86], "Z")].into_iter().enumerate() {
+        let mut e = o;
+        e[i] += al;
+        pdf.line(proj(o), proj(e), 1.0, c);
+        let p = proj(e);
+        pdf.text(p.0 + 2.0, p.1 + 2.0, 7.0, Font::Bold, c, name);
+    }
+    // wires, coloured by current like the View
+    let calc_ok = calc.filter(|c| c.mesh.wire_segs.len() == ant.wires.len()).filter(|_| view.show_current);
+    let mut imax = 0.0f64;
+    let mut drawn = false;
+    if let Some(c) = calc_ok {
+        if let Some(v) = c.seg_currents.as_ref() {
+            imax = v.iter().map(|s| s.2).fold(0.0, f64::max);
+            if imax > 0.0 {
+                for (a, b, i) in v {
+                    pdf.line(proj(*a), proj(*b), 1.8, col(crate::plots::heat((i / imax) as f32)));
+                }
+                drawn = true;
+            }
+        } else {
+            let mut acc = vec![[C::new(0.0, 0.0); 2]; c.mesh.segs.len()];
+            for (b, i) in c.mesh.bases.iter().zip(c.currents.iter()) {
+                for p in &b.parts {
+                    acc[p.seg][p.half as usize] += *i * p.dir;
+                }
+            }
+            imax = acc.iter().flat_map(|a| [a[0].norm(), a[1].norm()]).fold(0.0, f64::max);
+            if imax > 0.0 {
+                for (si, s) in c.mesh.segs.iter().enumerate() {
+                    let m = [(s.a[0] + s.b[0]) / 2.0, (s.a[1] + s.b[1]) / 2.0, (s.a[2] + s.b[2]) / 2.0];
+                    pdf.line(proj(s.a), proj(m), 1.8, col(crate::plots::heat((acc[si][0].norm() / imax) as f32)));
+                    pdf.line(proj(m), proj(s.b), 1.8, col(crate::plots::heat((acc[si][1].norm() / imax) as f32)));
+                }
+                drawn = true;
+            }
+        }
+    }
+    if !drawn {
+        imax = 0.0;
+        for wi in &ant.wires {
+            pdf.line(proj(world(wi.p1)), proj(world(wi.p2)), 1.4, [0.12, 0.2, 0.43]);
+        }
+    }
+    let at = |wi: &Wire, f: f64| world([wi.p1[0] + (wi.p2[0] - wi.p1[0]) * f, wi.p1[1] + (wi.p2[1] - wi.p1[1]) * f, wi.p1[2] + (wi.p2[2] - wi.p1[2]) * f]);
+    for p in &ant.plates {
+        let c = p.corners();
+        let mut poly: Vec<(f64, f64)> = c.iter().map(|v| proj(world(*v))).collect();
+        poly.push(poly[0]);
+        pdf.polyline(&poly, 0.9, [0.27, 0.39, 0.63], false);
+    }
+    for t in &ant.lines {
+        if let (Some(a), Some(b)) = (ant.wires.get(t.a_wire), ant.wires.get(t.b_wire)) {
+            pdf.polyline(&[proj(at(a, t.a_pos)), proj(at(b, t.b_pos))], 1.0, [0.78, 0.47, 0.08], true);
+        }
+    }
+    if view.show_labels {
+        for (i, wi) in ant.wires.iter().enumerate() {
+            let p = proj(at(wi, 0.5));
+            pdf.text(p.0 + 2.5, p.1 - 2.5, 6.5, Font::Regular, [0.35, 0.35, 0.47], &format!("{}", i + 1));
+        }
+    }
+    for l in &ant.loads {
+        if let Some(wi) = ant.wires.get(l.wire) {
+            let p = proj(at(wi, l.pos));
+            pdf.fill_rect(p.0 - 3.0, p.1 - 3.0, 6.0, 6.0, [0.08, 0.63, 0.24]);
+        }
+    }
+    for s in &ant.sources {
+        if let Some(wi) = ant.wires.get(s.wire) {
+            let p = proj(at(wi, s.pos));
+            pdf.disc(p.0, p.1, 3.2, [0.86, 0.12, 0.12]);
+            pdf.circle(p.0, p.1, 5.0, 0.6, [0.86, 0.12, 0.12]);
+        }
+    }
+    pdf.clip_end();
+    // scale bar, legend
+    let target = 90.0 / sc;
+    let mag = 10f64.powf(target.log10().floor());
+    let len_m = [1.0, 2.0, 5.0, 10.0].iter().map(|k| k * mag).filter(|v| *v <= target).last().unwrap_or(mag);
+    let px = len_m * sc;
+    let (bx, by) = (x + w - 12.0 - px, y + h - 12.0);
+    pdf.line((bx, by), (bx + px, by), 1.2, INK);
+    pdf.line((bx, by - 3.0), (bx, by + 3.0), 1.0, INK);
+    pdf.line((bx + px, by - 3.0), (bx + px, by + 3.0), 1.0, INK);
+    let lab = if len_m >= 1.0 { format!("{} m", len_m) } else { format!("{} cm", (len_m * 100.0 * 1000.0).round() / 1000.0) };
+    pdf.text_centre(bx + px / 2.0, by - 5.0, 7.5, Font::Regular, INK, &lab);
+    let mut lx = x + 8.0;
+    let ly = y + h - 9.0;
+    pdf.disc(lx + 3.0, ly - 2.5, 3.0, [0.86, 0.12, 0.12]);
+    pdf.text(lx + 9.0, ly, 7.5, Font::Regular, INK, "source");
+    lx += 44.0;
+    if !ant.loads.is_empty() {
+        pdf.fill_rect(lx, ly - 5.5, 6.0, 6.0, [0.08, 0.63, 0.24]);
+        pdf.text(lx + 9.0, ly, 7.5, Font::Regular, INK, "load");
+        lx += 36.0;
+    }
+    if !ant.lines.is_empty() {
+        pdf.polyline(&[(lx, ly - 2.5), (lx + 14.0, ly - 2.5)], 1.0, [0.78, 0.47, 0.08], true);
+        pdf.text(lx + 17.0, ly, 7.5, Font::Regular, INK, "line");
+        lx += 42.0;
+    }
+    if imax > 0.0 {
+        for k in 0..60 {
+            let t = k as f32 / 59.0;
+            pdf.line((lx + k as f64, ly - 6.0), (lx + k as f64, ly + 0.5), 1.1, col(crate::plots::heat(t)));
+        }
+        pdf.text(lx + 64.0, ly, 7.5, Font::Regular, INK, "current: low → high");
+    }
+}
+
+pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, history: &[CalcResult], st: &ToolsState, view: &crate::plots::ViewState) -> Vec<u8> {
     let stamp = now_utc();
     let mut d = Doc { pdf: Pdf::new(), y: M, title: format!("Antenna report: {}", ant.name), stamp: stamp.clone() };
 
@@ -334,34 +528,13 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
     kv.push(("Segmentation".into(), format!("shortest λ/{}, longest λ/{}, growth {}, {} short segment(s) at each end", ant.seg.dm1, ant.seg.dm2, ant.seg.sc, ant.seg.ec)));
     d.pairs(&kv);
 
-    d.sub(&format!("Wires ({})", ant.wires.len()));
-    let rows: Vec<Vec<String>> = ant
-        .wires
-        .iter()
-        .enumerate()
-        .map(|(i, w)| {
-            vec![
-                format!("{}", i + 1),
-                f(w.p1[0], 3),
-                f(w.p1[1], 3),
-                f(w.p1[2], 3),
-                f(w.p2[0], 3),
-                f(w.p2[1], 3),
-                f(w.p2[2], 3),
-                f(w.r * 1000.0, 2),
-                if w.seg > 0 { format!("{}", w.seg) } else { "auto".into() },
-                f(w.length(), 4),
-                if w.insulated() { format!("{} mm, εr {}", f(w.ins_t * 1000.0, 2), w.ins_eps) } else { "—".into() },
-            ]
-        })
-        .collect();
-    d.table(&["No.", "X1 (m)", "Y1 (m)", "Z1 (m)", "X2 (m)", "Y2 (m)", "Z2 (m)", "R (mm)", "Seg", "Length (m)", "Insulation"], &rows, 8.5);
-
-    if !ant.sources.is_empty() {
-        d.sub("Sources");
-        let rows: Vec<Vec<String>> = ant.sources.iter().map(|s| vec![pos_label(s.wire, s.pos), f(s.volts, 2), f(s.phase_deg, 1)]).collect();
-        d.table(&["Position", "Volts", "Phase (°)"], &rows, 9.0);
-    }
+    let total: f64 = ant.wires.iter().map(|w| w.length()).sum();
+    d.sub(&format!("Antenna ({} wire{}, {:.2} m of wire, {} source{})", ant.wires.len(), if ant.wires.len() == 1 { "" } else { "s" }, total, ant.sources.len(), if ant.sources.len() == 1 { "" } else { "s" }));
+    let ph = 330.0;
+    d.need(ph + 8.0);
+    antenna_picture(&mut d.pdf, M, d.y, PAGE_W - 2.0 * M, ph, ant, calc, view);
+    d.y += ph + 6.0;
+    d.para("As seen on the View tab (its viewing direction, wire numbers and current colours).", 8.0, GREY);
     if !ant.loads.is_empty() {
         d.sub("Loads");
         let rows: Vec<Vec<String>> = ant.loads.iter().map(|l| vec![pos_label(l.wire, l.pos), load_text(&l.kind)]).collect();
@@ -619,12 +792,12 @@ mod tests {
     #[test]
     fn report_with_and_without_results() {
         let a = Antenna::example(2);
-        let empty = build(&a, None, None, &[], &ToolsState::default());
+        let empty = build(&a, None, None, &[], &ToolsState::default(), &crate::plots::ViewState::default());
         assert!(empty.starts_with(b"%PDF"));
         let calc = crate::mom::calculate(&a).unwrap();
         let mut st = ToolsState::default();
         st.report = Some(tools::find(&a, 13.5, 14.8, 31, 2.0).unwrap());
-        let full = build(&a, Some(Path::new("/tmp/x.maa")), Some(&calc), &[calc.result.clone()], &st);
+        let full = build(&a, Some(Path::new("/tmp/x.maa")), Some(&calc), &[calc.result.clone()], &st, &crate::plots::ViewState::default());
         let s: String = full.iter().map(|&c| if c < 128 { c as char } else { '#' }).collect();
         assert!(s.contains("/Count ") && full.len() > empty.len());
         let dir = std::env::temp_dir().join("wireant-report-test.pdf");
@@ -655,9 +828,10 @@ mod blank_tests {
             assert!(tools::find(&b, 14.0, 14.3, 5, 2.0).is_err(), "{e:?}");
         }
         // report and the file formats cope
-        assert!(build(&a, None, None, &[], &ToolsState::default()).starts_with(b"%PDF"));
+        assert!(build(&a, None, None, &[], &ToolsState::default(), &crate::plots::ViewState::default()).starts_with(b"%PDF"));
         let _ = crate::maa::write(&a);
         let _ = crate::nec_file::write(&a);
         let _ = crate::ez::write(&a);
     }
 }
+

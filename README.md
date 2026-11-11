@@ -90,8 +90,9 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
       35 Ω, …), or a length of feeder to a real-impedance point plus a
       quarter-wave transformer, as electrical degrees and metres at a velocity
       factor.
-  - **Antenna report (PDF):** an A4 report of the antenna (settings, wires,
-    sources, loads, lines, plates, comment), the Calculate tab's latest result,
+  - **Antenna report (PDF):** an A4 report of the antenna (settings, a picture
+    as on the View tab with its viewing direction, wire numbers and current
+    colours, loads, lines, plates, comment), the Calculate tab's latest result,
     notes and results history, the horizontal and vertical patterns, and the
     resonance finder's and match calculator's current results with their plots.
     The save dialog suggests the antenna file's name with `.pdf` in its folder,

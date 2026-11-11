@@ -600,7 +600,7 @@ impl App {
         }
         let Some(p) = d.save_file() else { return };
         let p = if p.extension().is_none() { p.with_extension("pdf") } else { p };
-        let bytes = crate::report::build(&self.ant, self.path.as_deref(), self.calc.as_ref(), &self.history, &self.tools);
+        let bytes = crate::report::build(&self.ant, self.path.as_deref(), self.calc.as_ref(), &self.history, &self.tools, &self.view);
         match std::fs::write(&p, bytes) {
             Ok(()) => {
                 self.remember_dir(&p);

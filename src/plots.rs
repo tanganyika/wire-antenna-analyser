@@ -467,7 +467,7 @@ pub enum ViewEdit {
     AddWire([f64; 3], [f64; 3]),
 }
 
-fn heat(t: f32) -> Color32 {
+pub(crate) fn heat(t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
     let r = (255.0 * (t * 2.0).min(1.0)) as u8;
     let g = (255.0 * (1.0 - (t - 0.5).abs() * 2.0).max(0.0) * 0.85) as u8;

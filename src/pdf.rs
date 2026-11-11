@@ -199,6 +199,26 @@ impl Pdf {
         self.cur += &format!("q {:.3} {:.3} {:.3} rg {:.2} {:.2} {:.2} {:.2} re f Q\n", rgb[0], rgb[1], rgb[2], x, PAGE_H - y - h, w, h);
     }
 
+    /// Restrict drawing to a rectangle until `clip_end`.
+    pub fn clip_begin(&mut self, x: f64, y: f64, w: f64, h: f64) {
+        self.cur += &format!("q {:.2} {:.2} {:.2} {:.2} re W n\n", x, PAGE_H - y - h, w, h);
+    }
+
+    pub fn clip_end(&mut self) {
+        self.cur += "Q\n";
+    }
+
+    /// A filled circle.
+    pub fn disc(&mut self, cx: f64, cy: f64, r: f64, rgb: [f64; 3]) {
+        let mut o = format!("q {:.3} {:.3} {:.3} rg ", rgb[0], rgb[1], rgb[2]);
+        for i in 0..=24 {
+            let a = i as f64 * std::f64::consts::TAU / 24.0;
+            o += &format!("{:.2} {:.2} {} ", cx + r * a.cos(), PAGE_H - (cy + r * a.sin()), if i == 0 { "m" } else { "l" });
+        }
+        o += "f Q\n";
+        self.cur += &o;
+    }
+
     pub fn circle(&mut self, cx: f64, cy: f64, r: f64, width: f64, rgb: [f64; 3]) {
         let pts: Vec<(f64, f64)> = (0..=72).map(|i| {
             let a = i as f64 * std::f64::consts::TAU / 72.0;
