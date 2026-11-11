@@ -91,6 +91,34 @@ impl Default for ToolsState {
     }
 }
 
+impl ToolsState {
+    /// A resonance search range of ±15% around `f_mhz`.
+    pub fn range_around(&mut self, f_mhz: f64) {
+        self.res_f0 = (f_mhz * 0.85 * 1000.0).round() / 1000.0;
+        self.res_f1 = (f_mhz * 1.15 * 1000.0).round() / 1000.0;
+    }
+
+    /// A different antenna was loaded: its frequency for the resonance range and
+    /// the match calculator, and none of the previous antenna's results.
+    pub fn for_antenna(&mut self, ant: &Antenna) {
+        self.range_around(ant.freq_mhz);
+        self.report = None;
+        self.sel = 0;
+        self.m_f = ant.freq_mhz;
+        self.m_z0 = ant.z0;
+        self.m_r = ant.z0;
+        self.m_x = 0.0;
+    }
+
+    /// Before opening the resonance finder: a range that holds the design
+    /// frequency (kept if the user set one that does).
+    pub fn range_for(&mut self, f_mhz: f64) {
+        if !(self.res_f0 > 0.0 && self.res_f0 < f_mhz && f_mhz < self.res_f1) {
+            self.range_around(f_mhz);
+        }
+    }
+}
+
 pub enum ToolAction {
     FindResonances,
     SetFreq(f64),
@@ -704,6 +732,26 @@ mod tests {
         let c = 1.0 / ((2.0 * PI * f0 * 1e6).powi(2) * l);
         let w = 2.0 * PI * f_mhz * 1e6;
         C::new(r, w * l - 1.0 / (w * c))
+    }
+
+    #[test]
+    fn tools_follow_a_new_antenna() {
+        let mut st = ToolsState::default();
+        let mut a = Antenna::example(0);
+        a.freq_mhz = 7.1;
+        st.for_antenna(&a);
+        assert!(st.res_f0 < 7.1 && st.res_f1 > 7.1);
+        st.report = Some(ResonanceReport { resonances: vec![], points: vec![(7.0, C::new(50.0, 0.0))], min_swr: (7.0, 1.0), z0: 50.0, limit: 2.0 });
+        a.freq_mhz = 50.2;
+        st.for_antenna(&a);
+        assert!(st.report.is_none() && st.res_f0 < 50.2 && st.res_f1 > 50.2 && st.m_f == 50.2);
+        // a user range around the frequency is kept; one that misses it is reset
+        st.res_f0 = 49.0;
+        st.res_f1 = 52.0;
+        st.range_for(50.2);
+        assert_eq!((st.res_f0, st.res_f1), (49.0, 52.0));
+        st.range_for(144.3);
+        assert!(st.res_f0 < 144.3 && st.res_f1 > 144.3);
     }
 
     #[test]

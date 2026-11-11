@@ -285,6 +285,10 @@ impl App {
         self.reset_sweep_band();
         self.default_opt_vars();
         self.selected_wire = None;
+        // tools and undo belong to the previous antenna
+        self.tools.for_antenna(&self.ant);
+        self.undo.clear();
+        self.wire_edit = None;
     }
 
     fn open_path(&mut self, p: PathBuf) {
@@ -555,10 +559,7 @@ impl App {
             });
             ui.menu_button("Tools", |ui| {
                 if ui.button("Resonance finder…").clicked() {
-                    if self.tools.res_f0 <= 0.0 || self.tools.res_f1 <= self.tools.res_f0 {
-                        self.tools.res_f0 = (self.ant.freq_mhz * 0.85 * 1000.0).round() / 1000.0;
-                        self.tools.res_f1 = (self.ant.freq_mhz * 1.15 * 1000.0).round() / 1000.0;
-                    }
+                    self.tools.range_for(self.ant.freq_mhz);
                     self.tools.res_open = true;
                     ui.close();
                 }
