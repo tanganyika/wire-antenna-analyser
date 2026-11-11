@@ -1,10 +1,10 @@
 # Wire Antenna Analyser
 
-A Linux desktop program for modelling wire antennas: impedance, SWR, gain, front-to-back,
+A desktop program for Linux, Windows and macOS for modelling wire antennas: impedance, SWR, gain, front-to-back,
 radiation patterns (2D and 3D), frequency sweeps and an optimizer. It is written in Rust with
 egui, and the heavy calculations run on every processor core.
 
-It was built as an independent Linux take on the classic MMANA-GAL basic workflow. It is **not**
+It was built as an independent take on the classic MMANA-GAL basic workflow. It is **not**
 affiliated with or endorsed by the MMANA-GAL authors (JE3HHT, DL1PBD, DL2KQ), and contains none of
 their code or files. MMANA-GAL basic is freeware for private use from <http://www.gal-ana.de/basicmm/>.
 
@@ -173,12 +173,35 @@ These are the weaker spots, with how far they have been checked.
 - **Wire editor:** changes apply immediately. Press Calculate again for new
   results; the old results stay on screen until you do.
 
+## Install on Windows or macOS
+
+Download a package from the repository's Releases page (or the latest run on the Actions
+tab: Build → Artifacts):
+
+- **Windows:** `wireant-<version>-windows-x64.zip`. Unzip it anywhere and run
+  `wireant.exe`. It isn't code-signed, so SmartScreen may warn the first time: choose
+  **More info → Run anyway**.
+- **macOS (Apple Silicon and Intel, macOS 11 or later):** `wireant-<version>-macos-universal.dmg`.
+  Drag **Wire Antenna Analyser** to Applications. It isn't notarised, so open it the
+  first time with right-click → **Open**, or allow it in System Settings → Privacy &
+  Security. Open antenna files with File → Open (double-clicking them in Finder doesn't
+  load them yet).
+
+The NEC-2 engine is inside the program on all three systems. Settings are kept in
+`%APPDATA%\wireant` on Windows and `~/Library/Application Support/wireant` on macOS.
+
+To make the packages, push a version tag (`git tag v0.2.0 && git push --tags`): the Build
+workflow then tests on all three systems and attaches the packages to a GitHub release.
+Ordinary pushes test and package on Linux only, to save Actions minutes; to build the
+Windows and macOS packages without a release, use Actions → Build → **Run workflow**.
+
 ## Install on Linux
 
-You need Rust (<https://rustup.rs>) and a C compiler (`sudo apt install build-essential` on
-Debian/Ubuntu/Zorin). Cargo fetches the wiremom engine from
-<https://github.com/tanganyika/wiremom> at the commit pinned in `Cargo.lock`; while that
-repository is private, your git needs access to it (for example `gh auth setup-git`). Then:
+A Linux package (`wireant-<version>-linux-x86_64.tar.gz`) comes with each release: unpack it
+and run `./install.sh`. To build it yourself you need Rust (<https://rustup.rs>) and a C
+compiler (`sudo apt install build-essential` on Debian/Ubuntu/Zorin). Cargo fetches the
+wiremom engine from <https://github.com/tanganyika/wiremom> at the commit pinned in
+`Cargo.lock`. Then:
 
 ```sh
 ./install.sh        # builds if needed, installs to ~/.local (menu entry, icon, file types)
