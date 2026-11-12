@@ -135,8 +135,14 @@ impl Server {
                     None => self.path.clone().ok_or_else(|| CallError::Failed("No path given and the antenna wasn't opened from a file.".into()))?,
                 };
                 let p = save(&self.ant, &p).map_err(CallError::Failed)?;
+                let ext = |e: &str| p.extension().is_some_and(|x| x.eq_ignore_ascii_case(e));
+                let left_out = crate::app::not_saved(&self.ant, ext("ez"), ext("nec"));
                 self.path = Some(p.clone());
-                json!({ "saved": p })
+                if left_out.is_empty() {
+                    json!({ "saved": p })
+                } else {
+                    json!({ "saved": p, "left_out": left_out, "note": "This file type can't hold these; save as .nec to keep everything." })
+                }
             }
             "get_antenna" => json!({ "antenna": self.ant, "path": self.path, "summary": self.summary() }),
             "set_antenna" => {

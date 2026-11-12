@@ -12,8 +12,10 @@
 **Save** writes the antenna back to its file in the same format. **Save as…** chooses the format
 from the file name's ending (`.maa`, `.nec` or `.ez`); without one, it saves `.maa`. **Save as EZNEC** and **Save as NEC** export directly.
 
-`.maa` files can't hold transmission lines or plates; use `.nec` to keep them. Transmission lines
-in EZNEC files are skipped when they are opened.
+`.nec` files keep everything. `.maa` files can't hold transmission lines or plates, and EZNEC
+files as saved here can't hold those or the second ground. If you save an antenna that has any of
+these to a file that can't hold them, a note says what was left out. Transmission lines in EZNEC
+files are skipped when they are opened.
 
 **File → Examples** loads one of six ready-made antennas: a dipole, an inverted V, a Yagi, a
 vertical, a ground plane and a quad.

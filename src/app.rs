@@ -130,6 +130,26 @@ struct Prefs {
     test_msg: String,
 }
 
+/// What the antenna has that a file of this kind can't hold. `.nec` keeps everything; `.maa`
+/// has no transmission lines or plates; `.ez` (as written here) has neither, nor the second ground.
+pub(crate) fn not_saved(ant: &Antenna, is_ez: bool, is_nec: bool) -> Vec<String> {
+    let mut v = vec![];
+    if is_nec {
+        return v;
+    }
+    let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
+    if !ant.lines.is_empty() {
+        v.push(n(ant.lines.len(), "transmission line", "transmission lines"));
+    }
+    if !ant.plates.is_empty() {
+        v.push(n(ant.plates.len(), "plate", "plates"));
+    }
+    if is_ez && ant.ground.second.enabled && ant.ground.kind != GroundKind::Free {
+        v.push("the second ground (sea, marsh or other ground nearby)".into());
+    }
+    v
+}
+
 /// Where the report's save dialog starts: the antenna file's folder and name with
 /// .pdf, or "untitled.pdf" in the last folder used for a new antenna.
 fn report_target(file: Option<&std::path::Path>, last_dir: Option<&std::path::Path>) -> (Option<PathBuf>, String) {
@@ -383,9 +403,20 @@ impl App {
         } else {
             maa::write(&self.ant).into_bytes()
         };
+        let left_out = not_saved(&self.ant, is_ez, is_nec);
         match std::fs::write(&p, data) {
             Ok(()) => {
                 self.status = format!("Saved {}", p.display());
+                if !left_out.is_empty() {
+                    let kind = if is_ez { "EZNEC" } else { "MMANA" };
+                    self.error = Some(format!(
+                        "Saved with notes: {kind} files can't hold everything in this antenna, so {} left out of {}:\n• {}\n\nSave as NEC (.nec) to keep it all.",
+                        if left_out.len() == 1 { "this was" } else { "these were" },
+                        p.file_name().unwrap_or_default().to_string_lossy(),
+                        left_out.join("\n• ")
+                    ));
+                    self.status += " (some parts left out)";
+                }
                 self.remember_dir(&p);
                 self.path = Some(p);
             }
@@ -2103,7 +2134,7 @@ impl eframe::App for App {
         });
         if let Some(e) = self.error.clone() {
             let mut open = true;
-            egui::Window::new(if e.starts_with("Opened with notes") { "Notes" } else { "Problem" }).collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO).show(&ctx, |ui| {
+            egui::Window::new(if e.starts_with("Opened with notes") || e.starts_with("Saved with notes") { "Notes" } else { "Problem" }).collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO).show(&ctx, |ui| {
                 ui.label(e);
                 if ui.button("OK").clicked() {
                     self.error = None;
@@ -2142,5 +2173,23 @@ fn open_in_viewer(p: &std::path::Path) -> bool {
             true
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn not_saved_lists_what_each_format_drops() {
+        let mut a = Antenna::example(0);
+        assert!(not_saved(&a, true, false).is_empty());
+        a.ground.kind = GroundKind::Real;
+        a.ground.second.enabled = true;
+        assert_eq!(not_saved(&a, true, false), vec!["the second ground (sea, marsh or other ground nearby)".to_string()]);
+        assert!(not_saved(&a, false, false).is_empty(), ".maa keeps the second ground");
+        assert!(not_saved(&a, false, true).is_empty());
+        a.ground.kind = GroundKind::Free;
+        assert!(not_saved(&a, true, false).is_empty(), "no second ground in free space");
     }
 }

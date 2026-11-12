@@ -253,7 +253,8 @@ These are the weaker spots, with how far they have been checked.
   decks keep the full description in a `CM wireant ground2` line, and NEC-2
   itself reads the GD card as a boundary along +X.
 - **Files:** transmission lines in EZNEC files are skipped on import. `.maa` files
-  can't hold transmission lines or plates; use `.nec` to keep them.
+  can't hold transmission lines or plates, and saved `.ez` files can't hold those or the
+  second ground; saving says what was left out. Use `.nec` to keep everything.
 - **Wire editor:** changes apply immediately. Press Calculate again for new
   results; the old results stay on screen until you do.
 
