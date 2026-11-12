@@ -31,7 +31,7 @@ pub fn parse_pos(s: &str) -> Option<(usize, f64)> {
     Some((w.checked_sub(1)?, pos.clamp(0.0, 1.0)))
 }
 
-/// Files written by the original are Windows-1251 (Russian headings and comments) or plain ASCII.
+/// Files written by the original are Windows-1251 or plain ASCII.
 pub fn decode(bytes: &[u8]) -> String {
     if let Ok(s) = std::str::from_utf8(bytes) {
         return s.trim_start_matches('\u{feff}').to_string();
@@ -41,8 +41,8 @@ pub fn decode(bytes: &[u8]) -> String {
         .map(|&b| match b {
             0x00..=0x7f => b as char,
             0xc0..=0xff => char::from_u32(0x0410 + (b as u32 - 0xc0)).unwrap(),
-            0xa8 => 'Ё',
-            0xb8 => 'ё',
+            0xa8 => '\u{401}',
+            0xb8 => '\u{451}',
             0xb9 => '№',
             0x96 => '–',
             0x97 => '—',
@@ -81,19 +81,19 @@ pub fn parse(text: &str) -> Result<Antenna, String> {
         let is_header = line.starts_with("###")
             || (line.len() > 2 && line.starts_with('*') && line.ends_with('*') && line.trim_matches('*').trim().len() > 0);
         if is_header {
-            // Section names may be English or Russian; fall back to the fixed order
+            // Section names are matched by name; unrecognised ones fall back to the fixed order
             // wires, source, load, segmentation, G/H/M/R/AzEl/X.
             let raw = line.trim_matches(|c| c == '*' || c == '#' || c == ' ').to_lowercase();
             const ORDER: [&str; 5] = ["wires", "source", "load", "segmentation", "g/h/m/r/azel/x"];
             section = if line.starts_with("###") {
                 "comment".to_string()
-            } else if raw.starts_with("wire") || raw.starts_with("провод") {
+            } else if raw.starts_with("wire") {
                 "wires".into()
-            } else if raw.starts_with("source") || raw.starts_with("источ") {
+            } else if raw.starts_with("source") {
                 "source".into()
-            } else if raw.starts_with("load") || raw.starts_with("нагруз") {
+            } else if raw.starts_with("load") {
                 "load".into()
-            } else if raw.starts_with("segm") || raw.starts_with("автосегм") {
+            } else if raw.starts_with("segm") {
                 "segmentation".into()
             } else if raw.starts_with("g/h") {
                 "g/h/m/r/azel/x".into()

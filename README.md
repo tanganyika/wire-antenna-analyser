@@ -20,7 +20,7 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
     far field.
   - **NEC-2**: bundled public-domain `nec2c` with Sommerfeld-Norton real ground.
     Sweeps run many NEC-2 processes in parallel.
-- **Files:** open and save MMANA `.maa` (English and Russian headings), NEC `.nec`
+- **Files:** open and save MMANA `.maa`, NEC `.nec`
   (including 4nec2 `SY` symbols, helices, arcs, GM/GR/GX, `TL` lines and `SM`/`SC`
   plates), and EZNEC `.ez`.
 - **Tabs:**

@@ -91,9 +91,8 @@ box and series R were my guess and are gone).
 ## 5. File format (`.maa`) checked against the 722 examples
 
 - Line 1 name, then `*`, then frequency (MHz).
-- Section headings are **English or Russian** (Windows-1251), e.g. `***Источ.***`, `***Нагрузка***`,
-  `***Автосегм***`, `* Провода *`; some use a single `*`. The reader goes by name and falls back
-  to the fixed order wires, source, load, segmentation, G/H/M/R/AzEl/X. Comments `###…###`.
+- Files are Windows-1251 or ASCII. Section headings are `*`-delimited (some use a single `*`).
+  The reader goes by name and falls back to the fixed order wires, source, load, segmentation, G/H/M/R/AzEl/X. Comments `###…###`.
 - Wire: `X1, Y1, Z1, X2, Y2, Z2, R (m), Seg` (Seg −1 in 3 998 of 4 012 example wires).
 - Source: header `count, 1`; lines `wNc|wNb|wNe[k], phase, volts`. A trailing number (`w1e1`, `w2b2`)
   appears in 4 files; its meaning isn't known, so the rebuild places it at that end/centre.
