@@ -145,21 +145,33 @@ Preferences start-up engine; `WIREANT_ENGINE` overrides it, as for the program. 
 
 ## Engines compared
 
-| | wiremom (default) | MININEC | NEC-2 |
+| | **wiremom** (default) | **NEC-2** (nec2c) | **MININEC** |
 |---|---|---|---|
-| Method | MPIE, triangle currents, Galerkin | MININEC pulses | NEC-2 EFIE (nec2c) |
-| Runs | in-process, all cores | in-process, all cores | one process per calculation |
-| Real ground in the currents and impedance | Sommerfeld | no (perfect ground; real ground only in the pattern) | Sommerfeld-Norton |
-| Wires in or through the ground | yes | no | no |
-| Wires stopping on real ground | stand-in over perfect ground (warned) | same | not reliable (warned) |
-| Transmission lines | yes, with loss | no | yes, lossless |
-| Plates | yes | no | no (NEC-2 patches are for closed surfaces) |
-| Steel wire (permeability) | yes | yes | approximated (σ/μr) |
-| Second ground (sea, marsh, cliff) | yes, Fresnel zone or reflection point | yes, Fresnel zone or reflection point | yes, reflection point (GD card) |
+| **How it calculates** | Mixed-potential method: current shapes overlap between neighbouring segments and are tested the same way | Classic NEC-2 method: point-tested, with a three-term current shape on each segment | Pulse currents, the original MININEC approach used in MMANA |
+| **Real ground in impedance and currents** | Yes (Sommerfeld) | Yes (Sommerfeld–Norton) | No: perfect ground for the currents, real ground only in the pattern |
+| **Wires in or through the ground** (radials, ground rods) | Yes | No | No |
+| **Wires ending on real ground** | Treated as if the ground were perfect (warned) | Not reliable (warned) | Same as wiremom |
+| **Transmission lines** | Yes, with loss | Yes, lossless only | No |
+| **Plates** | Yes, flat plates | No (NEC-2 patches are only for closed surfaces) | No |
+| **Steel wire** (permeability) | Yes | Approximated (σ/μr) | Yes |
+| **Second ground area** (sea, marsh, cliff) | Gradual change across the boundary, or the ground where each ray reflects | Only the ground where each ray reflects (GD card) | Gradual change or reflection point, like wiremom |
+| **How it runs** | Inside the program, on all cores; sweeps reuse the slow ground calculation | A separate program run for each calculation, many at once | Inside the program, on all cores |
 
 On the six built-in examples the three engines agree within 0.07 dB in gain. The
 impedance spread is a few percent, except the Inverted V's reactance, where MININEC
 differs from the other two.
+
+In practice:
+
+- **Free space or perfect ground:** all three agree closely.
+- **Low antennas over real ground:** MININEC's impedance can be off. Its currents assume
+  perfect ground, so a low dipole's feed resistance and resonance shift compared with
+  wiremom and NEC-2.
+- **Ground-mounted verticals, buried radials, ground rods:** only wiremom models these properly.
+- **Feed lines, phasing lines and stubs:** wiremom includes line loss, NEC-2 treats lines
+  as lossless, and MININEC can't model them.
+- **Comparing with MMANA:** MININEC is closest to MMANA.
+- **Comparing with EZNEC, 4nec2 or other NEC tools:** NEC-2 is the standard reference.
 
 ## Using your own NEC-4 or NEC-5
 
