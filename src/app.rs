@@ -103,7 +103,12 @@ pub struct App {
     ins_all_kind: usize,
     /// File → Preferences, while open
     prefs: Option<Prefs>,
+    /// Help → About, while open
+    about_open: bool,
 }
+
+/// Where new versions are published.
+const RELEASES_URL: &str = "https://github.com/tanganyika/wire-antenna-analyser/releases/latest";
 
 /// The Preferences dialog's working copy and its "Save and test" run.
 struct Prefs {
@@ -192,6 +197,7 @@ impl App {
             ins_all_mm: 0.5,
             ins_all_kind: 0,
             prefs: None,
+            about_open: false,
         };
         if let Some(e) = crate::settings::get().default_engine.filter(|e| crate::nec::engine_available(*e)) {
             app.ant.engine = e;
@@ -207,6 +213,8 @@ impl App {
         if std::env::var_os("WIREANT_PREFS").is_some() {
             app.open_prefs();
         }
+        // test hook: WIREANT_ABOUT=1 starts with Help → About open
+        app.about_open = std::env::var_os("WIREANT_ABOUT").is_some();
         if let Some(p) = open {
             app.open_path(p);
         }
@@ -577,7 +585,12 @@ impl App {
                 }
             });
             ui.menu_button("Help", |ui| {
-                ui.label("Wire antenna analyser for Linux.");
+                if ui.button("About Wire Antenna Analyser…").clicked() {
+                    self.about_open = true;
+                    ui.close();
+                }
+                ui.separator();
+                ui.label("Wire antenna analyser.");
                 ui.label("Method-of-moments solver running on all processor cores.");
                 ui.label(format!("{} threads available.", self.max_threads));
             });
@@ -629,6 +642,38 @@ impl App {
             self.tools.m_x = c.result.z.im;
         }
         self.tools.m_z0 = self.ant.z0;
+    }
+
+    fn about_window(&mut self, ctx: &egui::Context) {
+        if !self.about_open {
+            return;
+        }
+        let mut open = true;
+        let mut close = false;
+        egui::Window::new("About").collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.vertical_centered(|ui| {
+                ui.heading("Wire Antenna Analyser");
+                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            });
+            ui.add_space(6.0);
+            ui.label("Models wire antennas: impedance, SWR, gain, front-to-back, radiation patterns, frequency sweeps and an optimizer, with the wiremom, MININEC and NEC-2 engines.");
+            ui.add_space(6.0);
+            ui.label("The latest version for Windows, macOS and Linux can be downloaded from:");
+            ui.hyperlink_to(RELEASES_URL, RELEASES_URL);
+            ui.add_space(6.0);
+            ui.label(format!("{} processor threads available.", self.max_threads));
+            ui.label("Free software under the GNU General Public License, version 3 or later.");
+            ui.add_space(6.0);
+            ui.vertical_centered(|ui| {
+                if ui.button("OK").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close || !open {
+            self.about_open = false;
+        }
     }
 
     fn open_prefs(&mut self) {
@@ -2005,6 +2050,7 @@ impl eframe::App for App {
         });
         self.tool_windows(&ctx);
         self.prefs_window(&ctx);
+        self.about_window(&ctx);
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Geometry => self.geometry(ui),
             Tab::View => self.view_tab(ui),
