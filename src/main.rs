@@ -3,6 +3,7 @@
 
 mod app;
 mod maa;
+mod mcp;
 mod model;
 mod mom;
 mod nec;
@@ -26,8 +27,17 @@ fn main() -> eframe::Result<()> {
         match a.as_str() {
             "--screenshot" => shot = args.next().map(PathBuf::from),
             "--tab" => tab = args.next().and_then(|t| app::Tab::from_name(&t)),
+            "--mcp" => {
+                // MCP server on stdin/stdout, no window
+                if let Err(e) = mcp::run() {
+                    eprintln!("wireant --mcp: {e}");
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
             "--help" | "-h" => {
                 println!("wireant [antenna.maa] [--tab geometry|view|calculate|far|sweep|optimizer] [--screenshot out.png]");
+                println!("wireant --mcp    run as an MCP server on stdin/stdout (no window)");
                 return Ok(());
             }
             _ => open = Some(PathBuf::from(a)),

@@ -1,6 +1,9 @@
 //! Antenna description: wires, sources, loads, ground and options.
 
-#[derive(Clone, Debug, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Wire {
     pub p1: [f64; 3],
     pub p2: [f64; 3],
@@ -50,7 +53,8 @@ impl Wire {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Source {
     pub wire: usize,
     /// Position along the wire, 0 = begin, 0.5 = centre, 1 = end.
@@ -59,7 +63,8 @@ pub struct Source {
     pub volts: f64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum LoadKind {
     /// Fixed impedance R + jX (ohms).
     Rx { r: f64, x: f64 },
@@ -72,7 +77,8 @@ pub enum LoadKind {
     Rlc { r: f64, l_uh: f64, c_pf: f64, parallel: bool },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Load {
     pub wire: usize,
     pub pos: f64,
@@ -132,7 +138,8 @@ impl Load {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum GroundKind {
     Free,
     Perfect,
@@ -149,7 +156,8 @@ impl GroundKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Ground {
     pub kind: GroundKind,
     /// Relative permittivity of real ground.
@@ -165,7 +173,8 @@ pub struct Ground {
 /// A second ground medium beyond a straight boundary or outside a circle, as
 /// NEC-2's GD card: it changes the ground reflection in the far field, not the
 /// currents.  Positions are relative to the origin (before "add height").
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SecondMedium {
     pub enabled: bool,
     pub eps_r: f64,
@@ -254,7 +263,8 @@ pub const GROUND_PRESETS: [(&str, f64, f64); 7] = [
 ];
 
 /// Which solver calculates the antenna.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Engine {
     /// The built-in multi-threaded MININEC-style solver.
     Mininec,
@@ -279,7 +289,8 @@ impl Engine {
 /// (language file english.mmn: WireSel0..WireSel8). Conductivity and permeability values are
 /// estimates (the protected main program holds the real ones); "pipe" uses the same skin-effect
 /// loss as "wire".
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Material {
     Lossless,
     CuWire,
@@ -343,7 +354,8 @@ impl Material {
 /// Automatic segmentation: shortest segment lambda/dm1 at the wire ends, longest lambda/dm2,
 /// growing by factor `sc` from the ends; `ec` = number of shortest segments at each end
 /// (FFSolver 0x405540, see MECHANICS.md §2).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Segmentation {
     pub dm1: f64,
     pub dm2: f64,
@@ -360,7 +372,8 @@ impl Default for Segmentation {
 /// A flat conducting plate (parallelogram) from `corner` along `edge1` and
 /// `edge2`.  Modelled by the wiremom engine; a wire ending on the plate connects to
 /// it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Plate {
     pub corner: [f64; 3],
     pub edge1: [f64; 3],
@@ -382,7 +395,8 @@ impl Plate {
 
 /// A transmission line between two places on wires (a feed line, phasing line or
 /// stub).  Modelled by the wiremom and NEC-2 engines.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TLine {
     pub a_wire: usize,
     pub a_pos: f64,
@@ -406,7 +420,8 @@ impl TLine {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Antenna {
     pub name: String,
     pub freq_mhz: f64,
@@ -561,5 +576,42 @@ impl Antenna {
                 a
             }
         }
+    }
+}
+
+// Defaults let JSON (the MCP interface) leave fields out.
+impl Default for Wire {
+    fn default() -> Self {
+        Wire::new([0.0; 3], [0.0; 3], 1.0e-3)
+    }
+}
+impl Default for Source {
+    fn default() -> Self {
+        Source { wire: 0, pos: 0.5, phase_deg: 0.0, volts: 1.0 }
+    }
+}
+impl Default for Load {
+    fn default() -> Self {
+        Load { wire: 0, pos: 0.5, kind: LoadKind::Rx { r: 0.0, x: 0.0 } }
+    }
+}
+impl Default for Ground {
+    fn default() -> Self {
+        Antenna::blank().ground
+    }
+}
+impl Default for Plate {
+    fn default() -> Self {
+        Plate::new([0.0; 3], [0.0; 3], [0.0; 3])
+    }
+}
+impl Default for TLine {
+    fn default() -> Self {
+        TLine::new(0, 0.5, 0, 0.5)
+    }
+}
+impl Default for Antenna {
+    fn default() -> Self {
+        Antenna::blank()
     }
 }

@@ -100,6 +100,44 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
     vector plots and standard PDF fonts, so nothing else needs installing.
     Once saved, the report opens in the default PDF viewer.
 - **Convenience:** the last folder used for open/save is remembered.
+- **MCP server:** `wireant --mcp` lets AI assistants build, load, calculate,
+  sweep and optimise antennas; see [Use from an AI assistant (MCP)](#use-from-an-ai-assistant-mcp).
+
+## Use from an AI assistant (MCP)
+
+`wireant --mcp` runs the program as a [Model Context Protocol](https://modelcontextprotocol.io)
+server instead of opening a window. An MCP client such as Claude Code or Claude Desktop starts
+it and talks to it over stdin/stdout (JSON-RPC, one message per line). The server keeps one
+current antenna between calls.
+
+Claude Code:
+
+```bash
+claude mcp add wireant -- /path/to/wireant --mcp
+```
+
+Other clients take the same command in their configuration, e.g. Claude Desktop's
+`claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "wireant": { "command": "/path/to/wireant", "args": ["--mcp"] } } }
+```
+
+| Tool | What it does |
+|---|---|
+| `list_examples` | built-in example antennas and which engines are available |
+| `new_antenna` | start from an example or an empty antenna |
+| `open_file`, `save_file` | `.maa`, `.nec` and `.ez` files, as in the program |
+| `get_antenna`, `set_antenna` | the whole antenna as JSON |
+| `update_antenna` | change it with a JSON Merge Patch, e.g. `{"freq_mhz": 7.1, "ground": {"kind": "real"}}` |
+| `set_wire`, `delete_wire` | change, add or remove one wire (sources and loads on a deleted wire go too) |
+| `calculate` | impedance, SWR, gain and direction, F/B; optional azimuth and elevation pattern cuts |
+| `sweep` | R, X, SWR (and gain, F/B) over a frequency range |
+| `optimize` | the optimizer: wire lengths, positions or ends against SWR, X, gain and F/B weights |
+
+`calculate`, `sweep` and `optimize` take an optional `engine` (`wiremom`, `mininec`, `nec2`),
+and `calculate` an optional `freq_mhz`, for that call only. `WIREANT_ENGINE` sets the starting
+engine as for the program. In the JSON, wires are numbered from 0; units are metres, MHz and ohms.
 
 ## Engines compared
 
@@ -228,6 +266,7 @@ window and exits (used for automated checks).
 | `nec2c/`, `build.rs` | bundled nec2c 1.3.1 source (public domain) and its build |
 | `src/maa.rs`, `src/nec_file.rs`, `src/ez.rs` | file formats |
 | `src/optimize.rs` | optimizer |
+| `src/mcp.rs` | MCP server (`--mcp`) |
 | `src/app.rs`, `src/plots.rs` | user interface and plots |
 | `MECHANICS.md`, `mechanics.json` | where each formula and value came from |
 | `tools/cc.sh` | optional C compiler for nec2c (`NEC2C_CC=tools/cc.sh`; falls back to `zig cc` when no `cc` exists) |
