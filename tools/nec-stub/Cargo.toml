@@ -1,0 +1,13 @@
+[package]
+name = "nec-stub"
+version = "0.1.0"
+edition = "2024"
+description = "Stand-in for a NEC program: records how another program calls it (arguments, folder, input files, typed answers) and calculates nothing"
+license = "GPL-3.0-or-later"
+publish = false
+
+# not part of the main program's build
+[workspace]
+
+[profile.release]
+opt-level = "s"
