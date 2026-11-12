@@ -103,6 +103,8 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
     or `untitled.pdf` in the last folder used. The PDF is written directly, with
     vector plots and standard PDF fonts, so nothing else needs installing.
     Once saved, the report opens in the default PDF viewer.
+- **Help** (Help menu, or F1 for the tab you are on): help pages built into the program.
+  They are also in [docs/help](docs/help/README.md).
 - **Preferences** (File → Preferences): the engine used at start-up and the external
   NEC program. The last folder used for open/save is remembered too.
 - **MCP server:** `wireant --mcp` lets AI assistants build, load, calculate,
@@ -312,6 +314,7 @@ window and exits (used for automated checks).
 | `src/optimize.rs` | optimizer |
 | `src/mcp.rs` | MCP server (`--mcp`) |
 | `src/settings.rs` | settings file (Preferences) |
+| `docs/help/`, `src/help.rs` | help pages (Markdown, built into the program) and the Help window |
 | `src/app.rs`, `src/plots.rs` | user interface and plots |
 | `MECHANICS.md`, `mechanics.json` | where each formula and value came from |
 | `tools/cc.sh` | optional C compiler for nec2c (`NEC2C_CC=tools/cc.sh`; falls back to `zig cc` when no `cc` exists) |

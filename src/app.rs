@@ -36,6 +36,17 @@ impl Tab {
             Tab::Optimizer => "Optimizer",
         }
     }
+    /// The help page (docs/help/<page>.md) for this tab.
+    fn help_page(&self) -> &'static str {
+        match self {
+            Tab::Geometry => "geometry",
+            Tab::View => "view",
+            Tab::Calculate => "calculate",
+            Tab::FarField | Tab::Pattern3D => "patterns",
+            Tab::Sweep => "sweep",
+            Tab::Optimizer => "optimizer",
+        }
+    }
     pub fn from_name(s: &str) -> Option<Tab> {
         let s = s.to_ascii_lowercase();
         Tab::ALL.into_iter().find(|t| t.label().to_ascii_lowercase().starts_with(&s) || format!("{:?}", t).to_ascii_lowercase() == s)
@@ -105,6 +116,8 @@ pub struct App {
     prefs: Option<Prefs>,
     /// Help → About, while open
     about_open: bool,
+    /// Help → Help topics
+    help: crate::help::HelpState,
 }
 
 /// Where new versions are published.
@@ -198,6 +211,7 @@ impl App {
             ins_all_kind: 0,
             prefs: None,
             about_open: false,
+            help: Default::default(),
         };
         if let Some(e) = crate::settings::get().default_engine.filter(|e| crate::nec::engine_available(*e)) {
             app.ant.engine = e;
@@ -215,6 +229,10 @@ impl App {
         }
         // test hook: WIREANT_ABOUT=1 starts with Help → About open
         app.about_open = std::env::var_os("WIREANT_ABOUT").is_some();
+        // test hook: WIREANT_HELP=<page> starts with that help page open (docs/help/<page>.md)
+        if let Ok(id) = std::env::var("WIREANT_HELP") {
+            app.help.show(&id);
+        }
         if let Some(p) = open {
             app.open_path(p);
         }
@@ -591,14 +609,27 @@ impl App {
                 }
             });
             ui.menu_button("Help", |ui| {
+                if ui.add(egui::Button::new("Help for this tab").shortcut_text("F1")).clicked() {
+                    self.help.show(self.tab.help_page());
+                    ui.close();
+                }
+                if ui.button("Getting started").clicked() {
+                    self.help.show("getting-started");
+                    ui.close();
+                }
+                ui.menu_button("Help topics", |ui| {
+                    for t in crate::help::TOPICS {
+                        if ui.button(crate::help::title(t)).clicked() {
+                            self.help.show(t.id);
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
                 if ui.button("About Wire Antenna Analyser…").clicked() {
                     self.about_open = true;
                     ui.close();
                 }
-                ui.separator();
-                ui.label("Wire antenna analyser.");
-                ui.label("Method-of-moments solver running on all processor cores.");
-                ui.label(format!("{} threads available.", self.max_threads));
             });
             ui.separator();
             for t in Tab::ALL {
@@ -2057,6 +2088,10 @@ impl eframe::App for App {
         self.tool_windows(&ctx);
         self.prefs_window(&ctx);
         self.about_window(&ctx);
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.help.show(self.tab.help_page());
+        }
+        crate::help::window(&ctx, &mut self.help);
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Geometry => self.geometry(ui),
             Tab::View => self.view_tab(ui),

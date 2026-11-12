@@ -10,6 +10,7 @@ mod nec;
 mod nec_file;
 mod wm;
 mod ez;
+mod help;
 mod optimize;
 mod plots;
 mod tools;
