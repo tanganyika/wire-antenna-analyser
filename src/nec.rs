@@ -1,6 +1,7 @@
-//! NEC-2 engine: the bundled public-domain nec2c (compiled by build.rs) run as a separate
-//! process. Each calculation writes a NEC card deck, runs nec2c and reads its report.
-//! Sweeps and optimizer trials run many nec2c processes at once on the rayon thread pool.
+//! NEC engines: the bundled public-domain nec2c (compiled by build.rs), or an external NEC
+//! program the user has a copy of (File → Preferences), run as a separate process.
+//! Each calculation writes a NEC card deck, runs the program and reads its report.
+//! Sweeps and optimizer trials run many processes at once on the rayon thread pool.
 
 use crate::model::*;
 use crate::mom::{self, CalcResult, FullResult, Gain, Patterns};
@@ -13,6 +14,15 @@ static NEC2C: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nec2c"));
 
 pub fn available() -> bool {
     !NEC2C.is_empty()
+}
+
+/// Whether an engine can run in this copy with the current settings.
+pub fn engine_available(e: Engine) -> bool {
+    match e {
+        Engine::Nec2 => available(),
+        Engine::External => crate::settings::get().external_ready(),
+        Engine::Mininec | Engine::Wiremom => true,
+    }
 }
 
 fn binary() -> Result<PathBuf, String> {
@@ -170,7 +180,7 @@ fn second_medium(ant: &Antenna) -> Option<(u8, f64)> {
 
 /// Runs a deck with these RP cards; pattern azimuths in the antenna's own frame.
 fn run_deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<Report, String> {
-    let mut rep = parse(&run(&deck(ant, lay, freq_mhz, rps)?)?)?;
+    let mut rep = parse(&run(&deck(ant, lay, freq_mhz, rps)?, ant.engine)?)?;
     // the cards asked for azimuths shifted by -rot, so this lands back on them
     if let Some((_, rot)) = second_medium(ant).filter(|s| s.1 != 0.0) {
         for p in rep.pattern.iter_mut() {
@@ -182,8 +192,8 @@ fn run_deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Resul
 
 fn deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<String, String> {
     if !ant.plates.is_empty() {
-        // NEC-2 patches only model closed surfaces (MFIE)
-        return Err("Plates need the wiremom engine: NEC-2's patches only model closed surfaces, not thin plates.".into());
+        // NEC patches only model closed surfaces (MFIE)
+        return Err("Plates need the wiremom engine: NEC's patches only model closed surfaces, not thin plates.".into());
     }
     if lay.pieces.is_empty() {
         return Err("There are no wires.".into());
@@ -282,35 +292,145 @@ fn deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<St
     Ok(d)
 }
 
-fn run(deck: &str) -> Result<String, String> {
+fn run(deck: &str, engine: Engine) -> Result<String, String> {
     static N: AtomicU64 = AtomicU64::new(0);
-    let bin = binary()?;
     let dir = std::env::temp_dir().join(format!("wireant-nec-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let inp = dir.join("in.nec");
-    let out = dir.join("out.txt");
-    std::fs::write(&inp, deck).map_err(|e| e.to_string())?;
-    // nec2c takes file names of at most 75 characters, so run it in the folder
-    let mut cmd = std::process::Command::new(&bin);
-    cmd.current_dir(&dir).arg("-iin.nec").arg("-oout.txt").stdin(std::process::Stdio::null());
+    let res = std::fs::write(dir.join("in.nec"), deck)
+        .map_err(|e| e.to_string())
+        .and_then(|_| if engine == Engine::External { run_external(&dir, deck) } else { run_nec2c(&dir) });
+    let _ = std::fs::remove_dir_all(&dir);
+    res
+}
+
+fn no_window(cmd: &mut std::process::Command) {
     #[cfg(windows)]
     {
         // don't flash a console window for each calculation
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
+    let _ = cmd;
+}
+
+fn run_nec2c(dir: &std::path::Path) -> Result<String, String> {
+    let bin = binary()?;
+    // nec2c takes file names of at most 75 characters, so run it in the folder
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.current_dir(dir).arg("-iin.nec").arg("-oout.txt").stdin(std::process::Stdio::null());
+    no_window(&mut cmd);
     let res = cmd.output();
-    let text = std::fs::read_to_string(&out).unwrap_or_default();
-    let _ = std::fs::remove_file(&inp);
-    let _ = std::fs::remove_file(&out);
-    let _ = std::fs::remove_dir(&dir);
+    let text = std::fs::read_to_string(dir.join("out.txt")).unwrap_or_default();
     let o = res.map_err(|e| format!("Couldn't start the NEC-2 engine: {e}"))?;
-    if !o.status.success() || !text.contains("ANTENNA INPUT PARAMETERS") {
+    if !o.status.success() || !text.contains(REPORT_MARK) {
         let msg = String::from_utf8_lossy(&o.stderr).trim().to_string();
-        let tail: String = text.lines().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" ");
-        return Err(format!("NEC-2 stopped: {}", if msg.is_empty() { tail } else { msg }));
+        return Err(format!("NEC-2 stopped: {}", if msg.is_empty() { tail(&text) } else { msg }));
     }
     Ok(text)
+}
+
+const REPORT_MARK: &str = "ANTENNA INPUT PARAMETERS";
+
+fn tail(text: &str) -> String {
+    text.lines().rev().filter(|l| !l.trim().is_empty()).take(4).collect::<Vec<_>>().into_iter().rev().map(str::trim).collect::<Vec<_>>().join(" ")
+}
+
+/// Where the last external run's input, output and messages are kept, for checking
+/// what the program made of the deck.
+pub fn external_last_dir() -> PathBuf {
+    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("wireant").join("external-nec-last")
+}
+
+/// Limits how many copies of the external program run at once.
+struct Slots {
+    used: std::sync::Mutex<usize>,
+    freed: std::sync::Condvar,
+}
+
+struct Slot(&'static Slots);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        if let Ok(mut n) = self.0.used.lock() {
+            *n -= 1;
+        }
+        self.0.freed.notify_one();
+    }
+}
+
+fn take_slot(limit: usize) -> Slot {
+    static S: Slots = Slots { used: std::sync::Mutex::new(0), freed: std::sync::Condvar::new() };
+    let mut n = S.used.lock().unwrap_or_else(|e| e.into_inner());
+    while *n >= limit.max(1) {
+        n = S.freed.wait(n).unwrap_or_else(|e| e.into_inner());
+    }
+    *n += 1;
+    Slot(&S)
+}
+
+/// Runs the user's own NEC program (File → Preferences) in `dir` on in.nec.  The report is
+/// taken from out.txt, any other file it wrote, or its standard output, whichever has one.
+fn run_external(dir: &std::path::Path, deck: &str) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let s = crate::settings::get();
+    let prog = s.nec_path.trim();
+    if prog.is_empty() {
+        return Err("No external NEC program is set: choose it under File → Preferences.".into());
+    }
+    if !std::path::Path::new(prog).is_file() {
+        return Err(format!("The external NEC program {prog} wasn't found: check File → Preferences."));
+    }
+    let args = if s.nec_args.trim().is_empty() && !s.nec_stdin { crate::settings::DEFAULT_NEC_ARGS } else { s.nec_args.as_str() };
+    let _slot = take_slot(if s.nec_jobs == 0 { usize::MAX } else { s.nec_jobs });
+    let mut cmd = std::process::Command::new(prog);
+    cmd.current_dir(dir)
+        .args(args.split_whitespace().map(|a| a.replace("{in}", "in.nec").replace("{out}", "out.txt")))
+        .stdin(if s.nec_stdin { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    no_window(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| format!("Couldn't start the external NEC program {prog}: {e}"))?;
+    if let Some(mut si) = child.stdin.take() {
+        // programs that ask for the file names read them here; it may not ask at all
+        let _ = si.write_all(b"in.nec\nout.txt\n");
+    }
+    let o = child.wait_with_output().map_err(|e| format!("The external NEC program failed: {e}"))?;
+    let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+    let out = std::fs::read_to_string(dir.join("out.txt")).unwrap_or_default();
+    let report = if out.contains(REPORT_MARK) {
+        Some(out.clone())
+    } else {
+        // some programs choose their own output name
+        let mut other: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_file() && p.file_name().is_some_and(|n| n != "in.nec")).collect())
+            .unwrap_or_default();
+        other.sort();
+        other
+            .iter()
+            .filter_map(|p| std::fs::read(p).ok())
+            .map(|b| String::from_utf8_lossy(&b).to_string())
+            .find(|t| t.contains(REPORT_MARK))
+            .or_else(|| stdout.contains(REPORT_MARK).then(|| stdout.clone()))
+    };
+    // keep the last run so its input and output can be looked at (and sent on)
+    let keep = external_last_dir();
+    if std::fs::create_dir_all(&keep).is_ok() {
+        let _ = std::fs::write(keep.join("in.nec"), deck);
+        let _ = std::fs::write(keep.join("out.txt"), report.as_deref().unwrap_or(&out));
+        let _ = std::fs::write(keep.join("stdout.txt"), &stdout);
+        let _ = std::fs::write(keep.join("stderr.txt"), &stderr);
+    }
+    report.ok_or_else(|| {
+        let why = [tail(&stderr), tail(&stdout), tail(&out)].into_iter().find(|t| !t.is_empty()).unwrap_or_default();
+        format!(
+            "The external NEC program gave no report this program can read ({}{}). Its input, output and messages are kept in {}.",
+            o.status,
+            if why.is_empty() { String::new() } else { format!(": {why}") },
+            keep.display()
+        )
+    })
 }
 
 /// All numbers on a line (handles fields that touch, like "1.0E+00-2.0E-01").
@@ -566,13 +686,17 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     let mesh = mom::build_mesh(ant, ant.lambda())?;
     let mut warnings = mesh.warnings.clone();
     if ant.lines.iter().any(|t| t.loss_db > 0.0) {
-        warnings.push("NEC-2 transmission lines are lossless: line loss is ignored by this engine (the wiremom engine includes it).".to_string());
+        warnings.push("NEC transmission lines (TL cards) are lossless: line loss is ignored by this engine (the wiremom engine includes it).".to_string());
     }
-    if crate::wm::touches_ground(ant) && !crate::wm::has_buried(ant) {
+    // NEC-4 and later model wires into lossy ground; NEC-2 can't
+    if ant.engine == Engine::Nec2 && crate::wm::touches_ground(ant) && !crate::wm::has_buried(ant) {
         warnings.push(NEC2_GROUND_CONNECTED.to_string());
     }
+    if ant.engine == Engine::External {
+        warnings.push("Calculated by the external NEC program with the same card deck as NEC-2 (experimental).".to_string());
+    }
     if second_medium(ant).is_some() && ant.ground.second.fresnel {
-        warnings.push("NEC-2 takes the second ground at each ray's reflection point; the Fresnel-zone transition needs the wiremom or MININEC engine.".to_string());
+        warnings.push("NEC takes the second ground at each ray's reflection point; the Fresnel-zone transition needs the wiremom or MININEC engine.".to_string());
     }
     Ok(FullResult {
         result: res.clone(),

@@ -101,13 +101,15 @@ pub struct App {
     last_dir: Option<PathBuf>,
     ins_all_mm: f64,
     ins_all_kind: usize,
+    /// File → Preferences, while open
+    prefs: Option<Prefs>,
 }
 
-/// Small settings file (remembers the last antenna folder between runs).
-fn settings_path() -> Option<PathBuf> {
-    // ~/.config, %APPDATA%, ~/Library/Application Support
-    let base = dirs::config_dir()?;
-    Some(base.join("wireant").join("settings.txt"))
+/// The Preferences dialog's working copy and its "Save and test" run.
+struct Prefs {
+    s: crate::settings::Settings,
+    test: Option<Arc<std::sync::Mutex<Option<String>>>>,
+    test_msg: String,
 }
 
 /// Where the report's save dialog starts: the antenna file's folder and name with
@@ -135,23 +137,6 @@ mod report_target_tests {
         assert_eq!((d.unwrap(), n.as_str()), (PathBuf::from("/home/x/last"), "untitled.pdf"));
         let (d, n) = report_target(None, None);
         assert_eq!((d, n.as_str()), (None, "untitled.pdf"));
-    }
-}
-
-fn load_last_dir() -> Option<PathBuf> {
-    let text = std::fs::read_to_string(settings_path()?).ok()?;
-    text.lines()
-        .find_map(|l| l.strip_prefix("last_dir="))
-        .map(PathBuf::from)
-        .filter(|p| p.is_dir())
-}
-
-fn save_last_dir(dir: &std::path::Path) {
-    if let Some(p) = settings_path() {
-        if let Some(parent) = p.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(p, format!("last_dir={}\n", dir.display()));
     }
 }
 
@@ -203,15 +188,24 @@ impl App {
             pat_mesh: true,
             pat_scale: plots::Scale3D::Arrl,
             pat_min_db: plots::MIN_DB_DEFAULT,
-            last_dir: load_last_dir(),
+            last_dir: crate::settings::get().last_dir.filter(|d| d.is_dir()),
             ins_all_mm: 0.5,
             ins_all_kind: 0,
+            prefs: None,
         };
+        if let Some(e) = crate::settings::get().default_engine.filter(|e| crate::nec::engine_available(*e)) {
+            app.ant.engine = e;
+        }
         match std::env::var("WIREANT_ENGINE").map(|v| v.to_ascii_lowercase()).as_deref() {
             Ok("nec") if crate::nec::available() => app.ant.engine = Engine::Nec2,
             Ok("wiremom") => app.ant.engine = Engine::Wiremom,
             Ok("mininec") => app.ant.engine = Engine::Mininec,
+            Ok("external") if crate::nec::engine_available(Engine::External) => app.ant.engine = Engine::External,
             _ => {}
+        }
+        // test hook: WIREANT_PREFS=1 starts with File → Preferences open
+        if std::env::var_os("WIREANT_PREFS").is_some() {
+            app.open_prefs();
         }
         if let Some(p) = open {
             app.open_path(p);
@@ -334,7 +328,7 @@ impl App {
     fn remember_dir(&mut self, file: &std::path::Path) {
         if let Some(dir) = file.parent().filter(|d| d.is_dir()) {
             if self.last_dir.as_deref() != Some(dir) {
-                save_last_dir(dir);
+                crate::settings::set(|s| s.last_dir = Some(dir.to_path_buf()));
             }
             self.last_dir = Some(dir.to_path_buf());
         }
@@ -552,6 +546,11 @@ impl App {
                     }
                 });
                 ui.separator();
+                if ui.button("Preferences…").clicked() {
+                    self.open_prefs();
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Quit").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -630,6 +629,130 @@ impl App {
             self.tools.m_x = c.result.z.im;
         }
         self.tools.m_z0 = self.ant.z0;
+    }
+
+    fn open_prefs(&mut self) {
+        self.prefs = Some(Prefs { s: crate::settings::get(), test: None, test_msg: String::new() });
+    }
+
+    fn prefs_window(&mut self, ctx: &egui::Context) {
+        let Some(p) = self.prefs.as_mut() else { return };
+        if let Some(t) = &p.test {
+            if let Some(m) = t.lock().ok().and_then(|mut m| m.take()) {
+                p.test_msg = m;
+                p.test = None;
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+        }
+        let mut open = true;
+        let mut close = false;
+        let mut save = false;
+        let mut test = false;
+        egui::Window::new("Preferences").collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+            ui.set_max_width(560.0);
+            ui.heading("Start-up");
+            ui.horizontal(|ui| {
+                ui.label("Engine:");
+                let mut e = p.s.default_engine.unwrap_or(Engine::Wiremom);
+                engine_pick(ui, "pref_engine", &mut e);
+                p.s.default_engine = Some(e);
+            });
+            ui.add_space(8.0);
+            ui.heading("External NEC program");
+            ui.label("Your own copy of NEC-4, NEC-5 or another NEC program, used as Engine → External NEC. Each calculation writes the same card deck as for NEC-2 to in.nec in a temporary folder, runs the program there, and reads its report from out.txt, any other file it writes, or what it prints.");
+            ui.add_space(4.0);
+            egui::Grid::new("prefs_nec").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                ui.label("Program:");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut p.s.nec_path).desired_width(380.0).hint_text("path to the NEC program"));
+                    if ui.button("Browse…").clicked() {
+                        if let Some(f) = rfd::FileDialog::new().set_title("NEC program").pick_file() {
+                            p.s.nec_path = f.display().to_string();
+                        }
+                    }
+                });
+                ui.end_row();
+                ui.label("Arguments:");
+                ui.add(egui::TextEdit::singleline(&mut p.s.nec_args).desired_width(380.0).hint_text(crate::settings::DEFAULT_NEC_ARGS))
+                    .on_hover_text("{in} and {out} become the input and output file names (in.nec, out.txt), e.g. \"{in} {out}\" or \"-i{in} -o{out}\". Leave empty for a program that asks for the names.");
+                ui.end_row();
+                ui.label("");
+                ui.checkbox(&mut p.s.nec_stdin, "Type the file names when the program asks for them");
+                ui.end_row();
+                ui.label("Runs at once:");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut p.s.nec_jobs).range(0..=256));
+                    ui.label("in sweeps and the optimizer (0 = one per processor thread)");
+                });
+                ui.end_row();
+            });
+            if !p.s.nec_path.trim().is_empty() && !std::path::Path::new(p.s.nec_path.trim()).is_file() {
+                ui.colored_label(Color32::from_rgb(180, 60, 40), "That program wasn't found.");
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let ready = p.s.external_ready() && p.test.is_none();
+                if ui.add_enabled(ready, egui::Button::new("Save and test")).on_hover_text("Saves these settings and calculates the half-wave dipole example with the external program").clicked() {
+                    test = true;
+                }
+                if p.test.is_some() {
+                    ui.spinner();
+                    ui.label("Running…");
+                }
+            });
+            if !p.test_msg.is_empty() {
+                ui.label(&p.test_msg);
+            }
+            let last = crate::nec::external_last_dir();
+            if last.is_dir() {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Last run's input and output: {}", last.display()));
+                    if ui.small_button("Open folder").clicked() {
+                        open_in_viewer(&last);
+                    }
+                });
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    save = true;
+                    close = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if save || test {
+            let s = p.s.clone();
+            crate::settings::set(|cur| {
+                let last_dir = cur.last_dir.clone();
+                *cur = s;
+                cur.last_dir = last_dir;
+            });
+        }
+        if test {
+            let slot = Arc::new(std::sync::Mutex::new(None));
+            p.test = Some(slot.clone());
+            p.test_msg.clear();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let mut a = Antenna::example(0);
+                a.engine = Engine::External;
+                let msg = match mom::calculate(&a) {
+                    Ok(r) => format!("✔ It works. {}: {}", a.name, status_line(&r.result)),
+                    Err(e) => format!("✘ {e}"),
+                };
+                if let Ok(mut m) = slot.lock() {
+                    *m = Some(msg);
+                }
+                ctx.request_repaint();
+            });
+        }
+        if close || !open {
+            self.prefs = None;
+        }
     }
 
     fn tool_windows(&mut self, ctx: &egui::Context) {
@@ -1666,9 +1789,14 @@ fn engine_pick(ui: &mut egui::Ui, id: &str, e: &mut Engine) {
         } else {
             ui.label("NEC-2 wasn't built into this copy");
         }
+        if crate::nec::engine_available(Engine::External) || *e == Engine::External {
+            ui.selectable_value(e, Engine::External, Engine::External.label());
+        } else {
+            ui.label("External NEC: set its program under File → Preferences");
+        }
     })
     .response
-    .on_hover_text("wiremom (default): built-in MPIE solver (triangle currents, Galerkin) with Sommerfeld real ground, wires in the ground, transmission lines and plates; multi-threaded in-process.\nMININEC: the original's method, real ground only in the far field.\nNEC-2: public-domain NEC-2 (nec2c) with Sommerfeld-Norton real ground; each calculation runs as its own process, sweeps run many at once.");
+    .on_hover_text("wiremom (default): built-in MPIE solver (triangle currents, Galerkin) with Sommerfeld real ground, wires in the ground, transmission lines and plates; multi-threaded in-process.\nMININEC: the original's method, real ground only in the far field.\nNEC-2: public-domain NEC-2 (nec2c) with Sommerfeld-Norton real ground; each calculation runs as its own process, sweeps run many at once.\nExternal NEC: your own copy of NEC-4, NEC-5 or another NEC program (File → Preferences), given the same card deck as NEC-2.");
 }
 
 fn wire_pick(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, wire: &mut usize, n: usize) {
@@ -1876,6 +2004,7 @@ impl eframe::App for App {
             });
         });
         self.tool_windows(&ctx);
+        self.prefs_window(&ctx);
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Geometry => self.geometry(ui),
             Tab::View => self.view_tab(ui),

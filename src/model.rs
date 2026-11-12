@@ -273,6 +273,9 @@ pub enum Engine {
     /// The wiremom engine: MPIE with triangle basis functions and Galerkin testing,
     /// Sommerfeld real ground, in-process and multi-threaded.
     Wiremom,
+    /// An external NEC program the user has a licence for (NEC-4, NEC-5 or another
+    /// build), set under File → Preferences; run like NEC-2 with the same card deck.
+    External,
 }
 
 impl Engine {
@@ -281,6 +284,7 @@ impl Engine {
             Engine::Mininec => "MININEC (built-in, multi-threaded)",
             Engine::Nec2 => "NEC-2 (nec2c, Sommerfeld ground)",
             Engine::Wiremom => "wiremom (built-in MPIE, Sommerfeld ground)",
+            Engine::External => "External NEC (your own copy; experimental)",
         }
     }
 }

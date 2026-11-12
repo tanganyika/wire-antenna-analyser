@@ -15,6 +15,7 @@ mod plots;
 mod tools;
 mod pdf;
 mod report;
+mod settings;
 
 use std::path::PathBuf;
 

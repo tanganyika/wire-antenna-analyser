@@ -10,7 +10,7 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 
 ## Features
 
-- **Three engines** (choose under Calculate → Engine; see [Engines compared](#engines-compared))
+- **Three engines, plus your own NEC** (choose under Calculate → Engine; see [Engines compared](#engines-compared))
   - **wiremom** (default): built-in, multi-threaded, in-process
     ([wiremom](https://github.com/tanganyika/wiremom)). It uses MPIE with
     triangle currents and Galerkin testing, perfect or Sommerfeld real ground,
@@ -20,6 +20,8 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
     far field.
   - **NEC-2**: bundled public-domain `nec2c` with Sommerfeld-Norton real ground.
     Sweeps run many NEC-2 processes in parallel.
+  - **External NEC** (experimental): your own licensed copy of NEC-4 or NEC-5, or
+    another NEC program, as EZNEC does; see [Using your own NEC-4 or NEC-5](#using-your-own-nec-4-or-nec-5).
 - **Files:** open and save MMANA `.maa`, NEC `.nec`
   (including 4nec2 `SY` symbols, helices, arcs, GM/GR/GX, `TL` lines and `SM`/`SC`
   plates), and EZNEC `.ez`.
@@ -99,7 +101,8 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
     or `untitled.pdf` in the last folder used. The PDF is written directly, with
     vector plots and standard PDF fonts, so nothing else needs installing.
     Once saved, the report opens in the default PDF viewer.
-- **Convenience:** the last folder used for open/save is remembered.
+- **Preferences** (File → Preferences): the engine used at start-up and the external
+  NEC program. The last folder used for open/save is remembered too.
 - **MCP server:** `wireant --mcp` lets AI assistants build, load, calculate,
   sweep and optimise antennas; see [Use from an AI assistant (MCP)](#use-from-an-ai-assistant-mcp).
 
@@ -135,9 +138,10 @@ Other clients take the same command in their configuration, e.g. Claude Desktop'
 | `sweep` | R, X, SWR (and gain, F/B) over a frequency range |
 | `optimize` | the optimizer: wire lengths, positions or ends against SWR, X, gain and F/B weights |
 
-`calculate`, `sweep` and `optimize` take an optional `engine` (`wiremom`, `mininec`, `nec2`),
-and `calculate` an optional `freq_mhz`, for that call only. `WIREANT_ENGINE` sets the starting
-engine as for the program. In the JSON, wires are numbered from 0; units are metres, MHz and ohms.
+`calculate`, `sweep` and `optimize` take an optional `engine` (`wiremom`, `mininec`, `nec2`,
+or `external` once it is set up under Preferences),
+and `calculate` an optional `freq_mhz`, for that call only. The server starts with the
+Preferences start-up engine; `WIREANT_ENGINE` overrides it, as for the program. In the JSON, wires are numbered from 0; units are metres, MHz and ohms.
 
 ## Engines compared
 
@@ -156,6 +160,32 @@ engine as for the program. In the JSON, wires are numbered from 0; units are met
 On the six built-in examples the three engines agree within 0.07 dB in gain. The
 impedance spread is a few percent, except the Inverted V's reactance, where MININEC
 differs from the other two.
+
+## Using your own NEC-4 or NEC-5
+
+NEC-4 and NEC-5 are licensed from Lawrence Livermore National Laboratory and can't be
+bundled, but if you have a copy the program can run it, as EZNEC Pro does. Under
+**File → Preferences → External NEC program**:
+
+- **Program:** the NEC executable.
+- **Arguments:** how it takes its file names. `{in}` and `{out}` become `in.nec` and
+  `out.txt`, e.g. `{in} {out}` or `-i{in} -o{out}`. For a program that asks for the
+  names instead, leave this empty and tick **Type the file names when the program asks
+  for them**.
+- **Runs at once:** how many copies sweeps and the optimizer may start together
+  (0 = one per processor thread); set 1 if the licence allows only one.
+
+**Save and test** calculates the half-wave dipole with it. Then choose **External NEC**
+under Calculate → Engine (or make it the start-up engine).
+
+Each calculation writes the same NEC card deck as the NEC-2 engine (`GW`, `GN`, `LD`, `TL`,
+`EX`, `FR`, `RP`, …) to `in.nec` in a temporary folder and runs the program there. The report
+is read from `out.txt`, any other file the program writes, or what it prints, using the
+NEC-2 report layout ("ANTENNA INPUT PARAMETERS", "RADIATION PATTERNS"). This is
+**experimental**: it has been checked with stand-in programs, not with NEC-4 or NEC-5
+themselves, whose input cards and report layout may differ. The last run's input,
+output and messages are kept (Preferences shows where) so that a run that fails can be
+looked at and the reader adjusted.
 
 ## Known limitations
 
@@ -267,6 +297,7 @@ window and exits (used for automated checks).
 | `src/maa.rs`, `src/nec_file.rs`, `src/ez.rs` | file formats |
 | `src/optimize.rs` | optimizer |
 | `src/mcp.rs` | MCP server (`--mcp`) |
+| `src/settings.rs` | settings file (Preferences) |
 | `src/app.rs`, `src/plots.rs` | user interface and plots |
 | `MECHANICS.md`, `mechanics.json` | where each formula and value came from |
 | `tools/cc.sh` | optional C compiler for nec2c (`NEC2C_CC=tools/cc.sh`; falls back to `zig cc` when no `cc` exists) |

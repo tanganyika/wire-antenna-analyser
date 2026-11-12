@@ -825,7 +825,7 @@ pub fn empty_mesh() -> Mesh {
 
 pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) -> Result<(CalcResult, Mesh, Solution, Option<Radiator>), String> {
     match ant.engine {
-        Engine::Nec2 => {
+        Engine::Nec2 | Engine::External => {
             let r = crate::nec::quick(ant, freq_mhz, seg_freq_mhz, need_far)?;
             let sol = Solution { freq_mhz, currents: vec![], z_in: vec![r.z], p_in: 0.0, n_unknowns: r.n_unknowns, n_segs: r.n_segs, t_fill_ms: 0.0, t_solve_ms: r.t_solve_ms };
             return Ok((r, empty_mesh(), sol, None));
@@ -890,7 +890,7 @@ pub fn summarize(ant: &Antenna, freq_mhz: f64, t0: Instant, sol: &Solution, rad:
 
 pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     match ant.engine {
-        Engine::Nec2 => return crate::nec::calculate(ant),
+        Engine::Nec2 | Engine::External => return crate::nec::calculate(ant),
         Engine::Wiremom => return crate::wm::calculate(ant),
         Engine::Mininec => {}
     }

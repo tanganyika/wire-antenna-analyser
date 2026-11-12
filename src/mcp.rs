@@ -22,10 +22,10 @@ struct Server {
 
 pub fn run() -> std::io::Result<()> {
     let mut ant = Antenna::example(0);
-    match std::env::var("WIREANT_ENGINE").map(|v| v.to_ascii_lowercase()).as_deref() {
-        Ok("nec") if crate::nec::available() => ant.engine = Engine::Nec2,
-        Ok("mininec") => ant.engine = Engine::Mininec,
-        _ => {}
+    // the program's default engine (File → Preferences), then WIREANT_ENGINE
+    let pick = std::env::var("WIREANT_ENGINE").ok().and_then(|v| crate::settings::engine_from_key(&v)).or(crate::settings::get().default_engine);
+    if let Some(e) = pick.filter(|e| crate::nec::engine_available(*e)) {
+        ant.engine = e;
     }
     let mut srv = Server { ant, path: None };
     let stdin = std::io::stdin();
@@ -352,28 +352,29 @@ fn db3(x: f64) -> f64 {
 }
 
 fn engines() -> Value {
-    json!([
-        { "name": "wiremom", "label": Engine::Wiremom.label(), "available": true },
-        { "name": "mininec", "label": Engine::Mininec.label(), "available": true },
-        { "name": "nec2", "label": Engine::Nec2.label(), "available": crate::nec::available() },
-    ])
+    let e = |x: Engine| json!({ "name": engine_name(x), "label": x.label(), "available": crate::nec::engine_available(x) });
+    json!([e(Engine::Wiremom), e(Engine::Mininec), e(Engine::Nec2), e(Engine::External)])
 }
 
 fn engine_name(e: Engine) -> &'static str {
-    match e {
-        Engine::Wiremom => "wiremom",
-        Engine::Mininec => "mininec",
-        Engine::Nec2 => "nec2",
-    }
+    crate::settings::engine_key(e)
 }
 
 fn parse_engine(s: &str) -> Result<Engine, CallError> {
-    match s.to_ascii_lowercase().as_str() {
-        "wiremom" => Ok(Engine::Wiremom),
-        "mininec" => Ok(Engine::Mininec),
-        "nec2" | "nec" | "nec-2" if crate::nec::available() => Ok(Engine::Nec2),
-        "nec2" | "nec" | "nec-2" => fail("The NEC-2 engine isn't built into this copy of the program.".into()),
-        _ => fail(format!("Unknown engine '{s}'; use wiremom, mininec or nec2.")),
+    let Some(e) = crate::settings::engine_from_key(s) else {
+        return fail(format!("Unknown engine '{s}'; use wiremom, mininec, nec2 or external."));
+    };
+    if !crate::nec::engine_available(e) {
+        return fail(unavailable(e).into());
+    }
+    Ok(e)
+}
+
+fn unavailable(e: Engine) -> &'static str {
+    if e == Engine::External {
+        "No external NEC program is set up: choose it in the program under File → Preferences."
+    } else {
+        "The NEC-2 engine isn't built into this copy of the program."
     }
 }
 
@@ -403,8 +404,8 @@ fn checked(a: Antenna) -> Result<Antenna, CallError> {
     if !(a.freq_mhz > 0.0) {
         return fail("The frequency must be above 0 MHz.".into());
     }
-    if a.engine == Engine::Nec2 && !crate::nec::available() {
-        return fail("The NEC-2 engine isn't built into this copy of the program.".into());
+    if !crate::nec::engine_available(a.engine) {
+        return fail(unavailable(a.engine).into());
     }
     let n = a.wires.len();
     for (i, w) in a.wires.iter().enumerate() {
@@ -520,7 +521,7 @@ numbered from 0 in JSON (the program's own labels such as w1c number from 1). A 
 before editing it with update_antenna or set_wire.";
 
 fn engine_prop() -> Value {
-    json!({ "type": "string", "enum": ["wiremom", "mininec", "nec2"], "description": "Engine for this call only (default: the antenna's engine)." })
+    json!({ "type": "string", "enum": ["wiremom", "mininec", "nec2", "external"], "description": "Engine for this call only (default: the antenna's engine). external = the user's own NEC-4/NEC-5 program, if set up in the program's Preferences." })
 }
 
 fn freq_prop() -> Value {
