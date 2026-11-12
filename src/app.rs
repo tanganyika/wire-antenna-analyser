@@ -481,9 +481,15 @@ impl App {
                 loop {
                     match rx.try_recv() {
                         Ok(optimize::Msg::Progress(s)) => self.opt_log.push(s),
-                        Ok(optimize::Msg::Done { ant, steps, evals, ms }) => {
-                            let txt = format!("{} steps, {} antenna calculations in {:.1} s on {} threads", steps, evals, ms / 1000.0, self.threads);
-                            self.status = format!("Optimizer finished: {}.", txt);
+                        Ok(optimize::Msg::Done { ant, steps, evals, ms, failed, error }) => {
+                            let mut txt = format!("{} steps, {} antenna calculations in {:.1} s on {} threads.", steps, evals, ms / 1000.0, self.threads);
+                            if ant.wires == self.ant.wires {
+                                txt += " No better antenna was found.";
+                            }
+                            if failed > 0 {
+                                txt += &format!(" {failed} trial antennas couldn't be calculated, e.g.: {}", error.unwrap_or_default());
+                            }
+                            self.status = format!("Optimizer finished: {}", txt);
                             self.opt_result = Some((ant, txt));
                             finished = true;
                             break;

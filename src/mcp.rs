@@ -258,21 +258,25 @@ impl Server {
                             if first.is_none() { first = Some(s.clone()) }
                             last = Some(s);
                         }
-                        optimize::Msg::Done { ant, steps, evals, ms } => done = Some((ant, steps, evals, ms)),
+                        optimize::Msg::Done { ant, steps, evals, ms, failed, error } => done = Some((ant, steps, evals, ms, failed, error)),
                         optimize::Msg::Failed(e) => return fail(e),
                     }
                 }
-                let Some((mut ant, steps, evals, ms)) = done else { return fail("The optimizer stopped without a result.".into()) };
+                let Some((mut ant, steps, evals, ms, failed, error)) = done else { return fail("The optimizer stopped without a result.".into()) };
                 let step_json = |s: &Option<optimize::Step>| s.as_ref().map(|s| json!({ "r_ohm": s.r, "x_ohm": s.x, "swr": fin(s.swr), "gain_dbi": s.ga, "fb_db": s.fb, "cost": s.cost }));
                 let apply = a.get("apply").and_then(Value::as_bool).unwrap_or(true);
                 ant.engine = self.ant.engine;
                 ant.freq_mhz = self.ant.freq_mhz;
+                let changed = ant.wires != self.ant.wires;
                 let wires: Vec<Value> = ant.wires.iter().map(|w| json!({ "p1": w.p1, "p2": w.p2, "length_m": w.length() })).collect();
                 if apply {
                     self.ant = ant;
                 }
                 json!({
                     "applied": apply,
+                    "changed": changed,
+                    "failed_trials": failed,
+                    "first_error": error,
                     "iterations": steps,
                     "evaluations": evals,
                     "time_ms": ms,
@@ -631,7 +635,7 @@ fn tools() -> Value {
                 "variables": { "type": "array", "items": { "type": "object", "properties": {
                     "wire": { "type": "integer", "minimum": 0 },
                     "kind": { "type": "string", "enum": ["length", "move_x", "move_y", "move_z", "x1", "y1", "z1", "x2", "y2", "z2"],
-                              "description": "length scales the wire about its centre; move_* shifts the whole wire; x1..z2 move one end." },
+                              "description": "length changes the wire at its free end (both ends if neither or both are joined to other wires or the ground); move_* shifts the whole wire; x1..z2 move one end. Wire ends joined to other wires move with them." },
                 }, "required": ["wire", "kind"] } },
                 "goals": { "type": "object", "description": "Weights (default swr 1, reactance 1, gain 0, front_to_back 0).", "properties": {
                     "swr": { "type": "number" },

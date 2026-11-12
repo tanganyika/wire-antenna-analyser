@@ -29,7 +29,7 @@ impl VarKind {
     ];
     pub fn label(&self) -> &'static str {
         match self {
-            VarKind::Length => "Length (about centre)",
+            VarKind::Length => "Length (joined ends stay)",
             VarKind::MoveX => "Move along X",
             VarKind::MoveY => "Move along Y",
             VarKind::MoveZ => "Move along Z",
@@ -78,52 +78,119 @@ pub struct Step {
 
 pub enum Msg {
     Progress(Step),
-    Done { ant: Antenna, steps: usize, evals: usize, ms: f64 },
+    /// `failed` trial antennas couldn't be calculated; `error` is the first reason.
+    Done { ant: Antenna, steps: usize, evals: usize, ms: f64, failed: usize, error: Option<String> },
     Failed(String),
 }
 
+/// Wire ends closer than this are joined (as the wire editor treats them).
+const JOIN_TOL: f64 = 1e-6;
+
+/// Which wire ends are joined to each other: `group[w][e]` for end e (0 = p1, 1 = p2)
+/// of wire w; ends with the same number are one joint.
+fn joints(a: &Antenna) -> (Vec<[usize; 2]>, Vec<usize>) {
+    let pts: Vec<[f64; 3]> = a.wires.iter().flat_map(|w| [w.p1, w.p2]).collect();
+    let mut id = vec![usize::MAX; pts.len()];
+    let mut size = Vec::new();
+    for i in 0..pts.len() {
+        if id[i] != usize::MAX {
+            continue;
+        }
+        let g = size.len();
+        size.push(0);
+        for j in i..pts.len() {
+            if id[j] == usize::MAX && (0..3).all(|k| (pts[i][k] - pts[j][k]).abs() < JOIN_TOL) {
+                id[j] = g;
+                size[g] += 1;
+            }
+        }
+    }
+    ((0..a.wires.len()).map(|w| [id[2 * w], id[2 * w + 1]]).collect(), size)
+}
+
+/// The antenna with the variables changed by `d` (metres).  Joined wire ends stay joined:
+/// moving an end moves every end joined to it.  "Length" keeps an end that is joined to
+/// another wire or stands on the ground where it is and changes the wire at its free end;
+/// it changes both ends only when neither or both are held.
 pub fn apply(base: &Antenna, vars: &[OptVar], d: &[f64]) -> Antenna {
     let mut a = base.clone();
+    let (group, size) = joints(base);
+    let grounded = |p: [f64; 3]| base.ground.kind != GroundKind::Free && (p[2] + base.ground.add_height).abs() < JOIN_TOL;
+    // how firmly an end is held: joined to another wire, standing on the ground
+    let held = |w: usize, e: usize| {
+        let p = if e == 0 { base.wires[w].p1 } else { base.wires[w].p2 };
+        (size[group[w][e]] > 1) as u8 + grounded(p) as u8
+    };
+    // the move of each joint
+    let mut shift = vec![[0.0f64; 3]; size.len()];
+    let mut add = |w: usize, e: usize, v: [f64; 3]| {
+        let g = group[w][e];
+        for k in 0..3 {
+            shift[g][k] += v[k];
+        }
+    };
     for (v, &dv) in vars.iter().zip(d) {
-        let Some(w) = a.wires.get_mut(v.wire) else { continue };
+        let Some(w) = base.wires.get(v.wire) else { continue };
+        let axis = |i: usize| {
+            let mut u = [0.0; 3];
+            u[i] = dv;
+            u
+        };
         match v.kind {
             VarKind::Length => {
                 let len = w.length();
-                if len > 0.0 {
-                    let s = ((len + dv) / len).max(0.01);
-                    let c: Vec<f64> = (0..3).map(|i| 0.5 * (w.p1[i] + w.p2[i])).collect();
-                    for i in 0..3 {
-                        w.p1[i] = c[i] + (w.p1[i] - c[i]) * s;
-                        w.p2[i] = c[i] + (w.p2[i] - c[i]) * s;
-                    }
+                if len <= 0.0 {
+                    continue;
+                }
+                let u: Vec<f64> = (0..3).map(|k| (w.p2[k] - w.p1[k]) / len).collect();
+                let out = |s: f64, sign: f64| [0, 1, 2].map(|k| sign * s * u[k]);
+                // don't shrink a wire below 1 % of its length
+                let dv = dv.max(-0.99 * len);
+                let (h1, h2) = (held(v.wire, 0), held(v.wire, 1));
+                if h1 > h2 {
+                    add(v.wire, 1, out(dv, 1.0));
+                } else if h2 > h1 {
+                    add(v.wire, 0, out(dv, -1.0));
+                } else {
+                    add(v.wire, 0, out(dv / 2.0, -1.0));
+                    add(v.wire, 1, out(dv / 2.0, 1.0));
                 }
             }
             VarKind::MoveX | VarKind::MoveY | VarKind::MoveZ => {
-                let i = match v.kind { VarKind::MoveX => 0, VarKind::MoveY => 1, _ => 2 };
-                w.p1[i] += dv;
-                w.p2[i] += dv;
+                let u = axis(match v.kind { VarKind::MoveX => 0, VarKind::MoveY => 1, _ => 2 });
+                add(v.wire, 0, u);
+                // a wire whose ends are joined to each other (a closed loop) moves once
+                if group[v.wire][1] != group[v.wire][0] {
+                    add(v.wire, 1, u);
+                }
             }
-            VarKind::X1 => w.p1[0] += dv,
-            VarKind::Y1 => w.p1[1] += dv,
-            VarKind::Z1 => w.p1[2] += dv,
-            VarKind::X2 => w.p2[0] += dv,
-            VarKind::Y2 => w.p2[1] += dv,
-            VarKind::Z2 => w.p2[2] += dv,
+            VarKind::X1 => add(v.wire, 0, axis(0)),
+            VarKind::Y1 => add(v.wire, 0, axis(1)),
+            VarKind::Z1 => add(v.wire, 0, axis(2)),
+            VarKind::X2 => add(v.wire, 1, axis(0)),
+            VarKind::Y2 => add(v.wire, 1, axis(1)),
+            VarKind::Z2 => add(v.wire, 1, axis(2)),
+        }
+    }
+    for (w, wire) in a.wires.iter_mut().enumerate() {
+        for k in 0..3 {
+            wire.p1[k] += shift[group[w][0]][k];
+            wire.p2[k] += shift[group[w][1]][k];
         }
     }
     a
 }
 
-fn evaluate(ant: &Antenna, g: &Goals) -> Option<(f64, Step)> {
+fn evaluate(ant: &Antenna, g: &Goals) -> Result<(f64, Step), String> {
     let need_far = g.w_ga > 0.0 || g.w_fb > 0.0;
-    let (r, ..) = mom::quick(ant, ant.freq_mhz, ant.freq_mhz, need_far).ok()?;
+    let (r, ..) = mom::quick(ant, ant.freq_mhz, ant.freq_mhz, need_far)?;
     let swr = if r.swr.is_finite() { r.swr.min(100.0) } else { 100.0 };
     let mut cost = g.w_swr * (swr - 1.0) + g.w_jx * r.z.im.abs() / ant.z0;
     if need_far {
         cost -= g.w_ga * r.ga_dbi / 2.0;
         cost -= g.w_fb * r.fb_db.min(35.0) / 10.0;
     }
-    Some((cost, Step { iter: 0, cost, r: r.z.re, x: r.z.im, swr: r.swr, ga: r.ga_dbi, fb: r.fb_db, evals: 0 }))
+    Ok((cost, Step { iter: 0, cost, r: r.z.re, x: r.z.im, swr: r.swr, ga: r.ga_dbi, fb: r.fb_db, evals: 0 }))
 }
 
 pub fn run(base: Antenna, vars: Vec<OptVar>, goals: Goals, stop: Arc<AtomicBool>, tx: Sender<Msg>, wake: impl Fn()) {
@@ -132,10 +199,21 @@ pub fn run(base: Antenna, vars: Vec<OptVar>, goals: Goals, stop: Arc<AtomicBool>
     let mut d = vec![0.0; vars.len()];
     let mut step = vec![lam * 0.01; vars.len()];
     let min_step = lam * 2e-5;
-    let Some((mut best, mut st)) = evaluate(&base, &goals) else {
-        let _ = tx.send(Msg::Failed("The starting antenna can't be calculated.".into()));
-        wake();
-        return;
+    let (mut best, mut st) = match evaluate(&base, &goals) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = tx.send(Msg::Failed(format!("The starting antenna can't be calculated: {e}")));
+            wake();
+            return;
+        }
+    };
+    let mut failed = 0;
+    let mut error: Option<String> = None;
+    let mut note = |r: &Result<(f64, Step), String>| {
+        if let Err(e) = r {
+            failed += 1;
+            error.get_or_insert_with(|| e.clone());
+        }
     };
     let mut evals = 1;
     let _ = tx.send(Msg::Progress(Step { evals, ..st.clone() }));
@@ -155,12 +233,13 @@ pub fn run(base: Antenna, vars: Vec<OptVar>, goals: Goals, stop: Arc<AtomicBool>
             })
             .collect();
         evals += trials.len();
-        let res: Vec<Option<(f64, Step)>> =
+        let res: Vec<Result<(f64, Step), String>> =
             trials.par_iter().map(|x| evaluate(&apply(&base, &vars, x), &goals)).collect();
+        res.iter().for_each(&mut note);
         let mut improved = false;
         let mut bi = None;
         for (k, r) in res.iter().enumerate() {
-            if let Some((c, _)) = r {
+            if let Ok((c, _)) = r {
                 if *c < best - 1e-9 && bi.map(|(_, b)| *c < b).unwrap_or(true) {
                     bi = Some((k, *c));
                 }
@@ -177,8 +256,10 @@ pub fn run(base: Antenna, vars: Vec<OptVar>, goals: Goals, stop: Arc<AtomicBool>
             // try continuing in the same direction (a cheap line search)
             let mut x = d.clone();
             x[i] += d[i] - prev[i];
-            if let Some((c2, s2)) = evaluate(&apply(&base, &vars, &x), &goals) {
-                evals += 1;
+            let r2 = evaluate(&apply(&base, &vars, &x), &goals);
+            evals += 1;
+            note(&r2);
+            if let Ok((c2, s2)) = r2 {
                 if c2 < best {
                     best = c2;
                     st = s2;
@@ -194,7 +275,7 @@ pub fn run(base: Antenna, vars: Vec<OptVar>, goals: Goals, stop: Arc<AtomicBool>
         let _ = tx.send(Msg::Progress(Step { iter: it, evals, ..st.clone() }));
         wake();
     }
-    let _ = tx.send(Msg::Done { ant: apply(&base, &vars, &d), steps: it, evals, ms: t.elapsed().as_secs_f64() * 1e3 });
+    let _ = tx.send(Msg::Done { ant: apply(&base, &vars, &d), steps: it, evals, ms: t.elapsed().as_secs_f64() * 1e3, failed, error });
     wake();
 }
 
@@ -215,6 +296,56 @@ mod tests {
         let (r, ..) = mom::quick(&ant, ant.freq_mhz, ant.freq_mhz, false).unwrap();
         println!("len {:.4} -> {:.4}, Z={:.2}", a.wires[0].length(), ant.wires[0].length(), r.z);
         assert!(r.z.im.abs() < 3.0);
+    }
+
+    fn joint_count(a: &Antenna) -> Vec<usize> {
+        let mut s = joints(a).1;
+        s.sort();
+        s
+    }
+
+    #[test]
+    fn length_keeps_joints_and_ground() {
+        // inverted V: the joined top stays, the free end moves
+        let a = Antenna::example(1);
+        let b = apply(&a, &[OptVar { wire: 0, kind: VarKind::Length }], &[0.3]);
+        assert_eq!(b.wires[0].p1, a.wires[0].p1);
+        assert!((b.wires[0].length() - a.wires[0].length() - 0.3).abs() < 1e-9);
+        assert_eq!(b.wires[1], a.wires[1]);
+        // vertical on perfect ground: the base stays on the ground
+        let a = Antenna::example(3);
+        let b = apply(&a, &[OptVar { wire: 0, kind: VarKind::Length }], &[-0.2]);
+        assert_eq!(b.wires[0].p1, a.wires[0].p1);
+        assert!((b.wires[0].length() - a.wires[0].length() + 0.2).abs() < 1e-9);
+        // quad: a side joined at both ends grows at both, and the loop stays closed
+        let a = Antenna::example(5);
+        let vars = [OptVar { wire: 0, kind: VarKind::Length }, OptVar { wire: 1, kind: VarKind::MoveX }, OptVar { wire: 6, kind: VarKind::Z2 }];
+        let b = apply(&a, &vars, &[0.2, 0.1, -0.05]);
+        assert_eq!(joint_count(&b), joint_count(&a));
+        let b = apply(&a, &vars[..1], &[0.2]);
+        assert_eq!(joint_count(&b), joint_count(&a));
+        assert!((b.wires[0].length() - a.wires[0].length() - 0.2).abs() < 1e-9);
+        // separate Yagi elements still grow about their centres
+        let a = Antenna::example(2);
+        let b = apply(&a, &[OptVar { wire: 0, kind: VarKind::Length }], &[0.4]);
+        assert!((b.wires[0].p1[1] - (a.wires[0].p1[1] - 0.2)).abs() < 1e-9);
+        assert!((b.wires[0].p2[1] - (a.wires[0].p2[1] + 0.2)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn resonates_joined_antennas() {
+        // these didn't change at all when "Length" pulled the joints apart
+        for i in [1, 3, 5] {
+            let mut a = Antenna::example(i);
+            a.engine = Engine::Mininec;
+            let vars: Vec<OptVar> = (0..a.wires.len().min(3)).map(|w| OptVar { wire: w, kind: VarKind::Length }).collect();
+            let (tx, rx) = std::sync::mpsc::channel();
+            run(a.clone(), vars, Goals::default(), Arc::new(AtomicBool::new(false)), tx, || {});
+            let Some(Msg::Done { ant, failed, error, .. }) = rx.try_iter().last() else { panic!() };
+            assert_eq!(failed, 0, "{}: {:?}", a.name, error);
+            let (r, ..) = mom::quick(&ant, ant.freq_mhz, ant.freq_mhz, false).unwrap();
+            assert!(r.z.im.abs() < 3.0, "{}: {:?}", a.name, r.z);
+        }
     }
 
     #[test]

@@ -48,7 +48,9 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
   - Far field plots (movable gain marker);
   - 3D pattern (ARRL / dB / linear);
   - Frequency sweep;
-  - Optimizer.
+  - Optimizer: changes wire lengths, positions or ends towards low SWR, jX near 0,
+    high gain or high F/B. Wire ends joined to other wires or to the ground stay
+    joined; click **Use optimized antenna** to keep the result.
 - **Modelling:** wire materials, lumped loads (R+jX, L/C/Q traps, series/parallel
   RLC), wire insulation (velocity factor), free / perfect / real ground, F/B rear
   range.
