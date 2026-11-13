@@ -37,7 +37,8 @@ It offers:
   values. Each is marked as low-pass or high-pass.
 - **Gamma match**: the rod length and series capacitor, from the element and rod diameters and
   their spacing. This uses the ARRL Antenna Book's transmission-line model, which is approximate,
-  so check the result by modelling the rod.
+  so check the result by modelling the rod, or add it to the antenna (below), which does that
+  for you.
 - **Coax sections**:
   - A Regier series section of a chosen impedance (75, 93, 35 Ω and others).
   - A length of feeder to a point where the impedance is purely resistive, then a quarter-wave

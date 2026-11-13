@@ -146,10 +146,11 @@ Other clients take the same command in their configuration, e.g. Claude Desktop'
 | `calculate` | impedance, SWR, gain and direction, F/B; optional azimuth and elevation pattern cuts |
 | `sweep` | R, X, SWR (and gain, F/B) over a frequency range |
 | `optimize` | the optimizer: wire lengths, positions or ends against SWR, X, gain and F/B weights |
+| `report` | the PDF antenna report, as Tools → Antenna report: calculates, finds resonances and suggests matches itself; saved next to the antenna's file unless given a `path` |
 
-`calculate`, `sweep` and `optimize` take an optional `engine` (`wiremom`, `mininec`, `nec2`,
+`calculate`, `sweep`, `optimize` and `report` take an optional `engine` (`wiremom`, `mininec`, `nec2`,
 or `external` once it is set up under Preferences),
-and `calculate` an optional `freq_mhz`, for that call only. The server starts with the
+and `calculate` and `report` an optional `freq_mhz`, for that call only. The server starts with the
 Preferences start-up engine; `WIREANT_ENGINE` overrides it, as for the program. In the JSON, wires are numbered from 0; units are metres, MHz and ohms.
 
 ## Engines compared

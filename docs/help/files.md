@@ -46,7 +46,8 @@ opens an antenna. `--tab <name>` starts on a tab, for example `--tab sweep`.
 ## Using it from an AI assistant
 
 `wireant --mcp` runs the program as an MCP server instead of opening a window, so an AI assistant
-such as Claude can build, calculate, sweep and optimize antennas with it. For Claude Code:
+such as Claude can build, calculate, sweep and optimize antennas with it, and write the same PDF
+report as **Tools → Antenna report**. For Claude Code:
 
 ```
 claude mcp add wireant -- /path/to/wireant --mcp
