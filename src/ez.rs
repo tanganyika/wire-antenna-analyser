@@ -7,6 +7,21 @@
 //! (u16 type, u32 length including the 7-byte header, u8 revision). Block 12 holds wire
 //! insulation (εr, thickness m, loss tangent per wire), block 13 per-wire loss (ρ, μr).
 //! Coordinates and wire diameters are stored in metres whatever the display units.
+//!
+//! Transmission lines sit in bytes 125-149 of record i: end-1 wire (u16) and position
+//! (% along it), end-2 wire and position, Z0 (negative = reversed), length (metres;
+//! negative = electrical degrees; 0 = the straight distance between the ends) and
+//! velocity factor. An end on wire 65535 is a shorted stub end. Block 14 holds each
+//! line's loss and loss frequency. Block 17 holds the L networks and block 15 the
+//! transformers, each as a count n, n again, a zero, n pairs of port wires, two zeros,
+//! n pairs of port positions (%), then for L networks four zeros and n sets of series
+//! R, X and shunt R, X (1e20 = open), for transformers two zeros and n pairs of port
+//! impedances. (Read from EZNEC 7.0's example files, checked against its help.)
+//!
+//! EZNEC, like NEC, puts sources, loads and line ends on segments; this program's
+//! engines put them at the joins between segments. So each goes to the centre of its
+//! EZNEC segment, and wires that carry any have their segment count doubled, which
+//! puts a join at each of those centres.
 
 use crate::model::*;
 
@@ -120,6 +135,12 @@ pub fn parse(d: &[u8], file_name: &str) -> Result<Imported, String> {
         })
         .collect();
     ant.sources.clear();
+    // the centre of the EZNEC segment holding a point `pct` % along wire `w`
+    let centre = |ant: &Antenna, w: usize, pct: f64| -> f64 {
+        let n = ant.wires[w].seg.max(1) as f64;
+        ((pct / 100.0 * n).floor().clamp(0.0, n - 1.0) + 0.5) / n
+    };
+    let mut on_wire: Vec<usize> = Vec::new();
     let mut current_sources = 0;
     for i in 0..nsrc {
         let o = rec(i);
@@ -129,19 +150,19 @@ pub fn parse(d: &[u8], file_name: &str) -> Result<Imported, String> {
             continue;
         }
         let st = r.u8(o + 62) as char;
+        on_wire.push(w - 1);
         if st == 'I' || st == 'J' {
             current_sources += 1;
         }
         ant.sources.push(Source {
             wire: w - 1,
-            pos: (r.f(o + 50) / 100.0).clamp(0.0, 1.0),
+            pos: centre(&ant, w - 1, r.f(o + 50)),
             phase_deg: r.f(o + 58),
             volts: r.f(o + 54).max(1e-9),
+            current: st == 'I' || st == 'J',
         });
     }
-    if current_sources > 1 {
-        warn.push("EZNEC current sources were read as voltage sources; with several sources the currents' ratios can differ.".into());
-    }
+    let _ = current_sources;
     ant.loads.clear();
     for i in 0..nl {
         let o = rec(i);
@@ -150,7 +171,8 @@ pub fn parse(d: &[u8], file_name: &str) -> Result<Imported, String> {
             warn.push(format!("Load {} is on wire {}, which doesn't exist.", i + 1, w));
             continue;
         }
-        let pos = (r.f(o + 65) / 100.0).clamp(0.0, 1.0);
+        let pos = centre(&ant, w - 1, r.f(o + 65));
+        on_wire.push(w - 1);
         let kind = match ltype {
             'R' => {
                 let (rr, l, c, fr) = (r.f(o + 151), r.f(o + 155), r.f(o + 159), r.f(o + 163));
@@ -173,12 +195,16 @@ pub fn parse(d: &[u8], file_name: &str) -> Result<Imported, String> {
         };
         ant.loads.push(Load { wire: w - 1, pos, kind });
     }
-    if nt > 0 {
-        warn.push(format!("{nt} transmission line(s) skipped: transmission lines aren't supported yet."));
-    }
-    if r.u16(156) > 0 || r.u16(152) > 0 || r.u16(154) > 0 {
-        warn.push("Transformers, networks or L-networks were skipped (not supported).".into());
-    }
+    // transmission lines: (end 1, end 2 as (wire, %)), Z0, length, VF
+    let tl_raw: Vec<((usize, f64), (usize, f64), f64, f64, f64)> = (0..nt)
+        .map(|i| {
+            let o = rec(i);
+            ((r.u16(o + 125) as usize, r.f(o + 127)), (r.u16(o + 131) as usize, r.f(o + 133)), r.f(o + 137), r.f(o + 141), r.f(o + 145))
+        })
+        .collect();
+    let mut tl_loss: Vec<(f64, f64)> = Vec::new();
+    let mut lnets: Vec<((usize, f64), (usize, f64), [f64; 4])> = Vec::new();
+    let mut xfmrs: Vec<((usize, f64), (usize, f64), f64, f64)> = Vec::new();
     // global wire loss
     material_from_rho(&mut ant, r.f(98), r.f(102));
     // variable-length blocks
@@ -202,6 +228,33 @@ pub fn parse(d: &[u8], file_name: &str) -> Result<Imported, String> {
                     }
                 }
             }
+            14 => {
+                let n = (r.u32(body) as usize).min(nt);
+                tl_loss = (0..n).map(|i| (r.f(body + 4 + 8 * i), r.f(body + 8 + 8 * i))).collect();
+            }
+            15 | 17 => {
+                // see the module notes for the layout
+                let n = r.u32(body) as usize;
+                if n > 0 && n < 10_000 {
+                    let pw = body + 12;
+                    let pp = pw + 8 * n + 8;
+                    let ports: Vec<((usize, f64), (usize, f64))> = (0..n)
+                        .map(|i| ((r.u32(pw + 8 * i) as usize, r.f(pp + 8 * i)), (r.u32(pw + 8 * i + 4) as usize, r.f(pp + 8 * i + 4))))
+                        .collect();
+                    if bt == 17 {
+                        let pv = pp + 8 * n + 16;
+                        for (i, (a, b)) in ports.into_iter().enumerate() {
+                            let v = pv + 16 * i;
+                            lnets.push((a, b, [r.f(v), r.f(v + 4), r.f(v + 8), r.f(v + 12)]));
+                        }
+                    } else {
+                        let pz = pp + 8 * n + 8;
+                        for (i, (a, b)) in ports.into_iter().enumerate() {
+                            xfmrs.push((a, b, r.f(pz + 8 * i), r.f(pz + 8 * i + 4)));
+                        }
+                    }
+                }
+            }
             13 => {
                 let n = (r.u32(body) as usize).min(nw);
                 let vals: Vec<(f64, f64)> = (0..n).map(|i| (r.f(body + 4 + 8 * i), r.f(body + 8 + 8 * i))).collect();
@@ -216,10 +269,148 @@ pub fn parse(d: &[u8], file_name: &str) -> Result<Imported, String> {
         }
         pos += bl;
     }
+    insertion_objects(&mut ant, &mut warn, &mut on_wire, &tl_raw, &tl_loss, &lnets, &xfmrs, centre);
+    // put a join between segments at every object's segment centre
+    on_wire.sort_unstable();
+    on_wire.dedup();
+    for w in on_wire {
+        if ant.wires[w].seg > 0 {
+            ant.wires[w].seg *= 2;
+        }
+    }
     if ant.sources.is_empty() {
         warn.push("No source found.".into());
     }
     Ok(Imported { ant, warnings: warn })
+}
+
+/// A lumped part from an EZNEC R + jX branch; None = open (1e20 or more).
+fn branch(rr: f64, x: f64) -> Option<LoadKind> {
+    if !(rr.abs() < 1e19 && x.abs() < 1e19) {
+        return None;
+    }
+    // a zero branch is a short circuit: keep it finite
+    let rr = if rr == 0.0 && x == 0.0 { 1e-6 } else { rr };
+    Some(LoadKind::Rx { r: rr, x })
+}
+
+/// A lumped part of admittance `y`; None when it's next to nothing.
+fn part(y: num_complex::Complex64) -> Option<LoadKind> {
+    (y.norm() > 1e-12).then(|| {
+        let z = 1.0 / y;
+        LoadKind::Rx { r: z.re, x: z.im }
+    })
+}
+
+/// EZNEC's transmission lines, L networks and transformers as this program's lines.
+#[allow(clippy::too_many_arguments)]
+fn insertion_objects(
+    ant: &mut Antenna,
+    warn: &mut Vec<String>,
+    on_wire: &mut Vec<usize>,
+    tl_raw: &[((usize, f64), (usize, f64), f64, f64, f64)],
+    tl_loss: &[(f64, f64)],
+    lnets: &[((usize, f64), (usize, f64), [f64; 4])],
+    xfmrs: &[((usize, f64), (usize, f64), f64, f64)],
+    centre: impl Fn(&Antenna, usize, f64) -> f64,
+) {
+    let nw = ant.wires.len();
+    let lambda = ant.lambda();
+    let mut feeds = 0;
+    // a port: (wire index, position) or None (with a warning) if it isn't on a wire
+    let mut port = |ant: &Antenna, warn: &mut Vec<String>, what: &str, (w, pct): (usize, f64)| -> Option<(usize, f64)> {
+        if w == 0 || w > nw {
+            warn.push(format!("{what} is on wire {w}, which doesn't exist (virtual segments aren't supported): skipped."));
+            return None;
+        }
+        on_wire.push(w - 1);
+        Some((w - 1, centre(ant, w - 1, pct)))
+    };
+    for (i, &(e1, e2, z0, len, vf)) in tl_raw.iter().enumerate() {
+        let what = format!("Transmission line {}", i + 1);
+        // a stub: one end shorted (wire 65535) or open
+        let stub = [e1.0, e2.0].iter().position(|&w| w >= 0xfff0);
+        let (a, b, shunt_b) = match stub {
+            Some(k) => {
+                let live = if k == 0 { e2 } else { e1 };
+                let Some(a) = port(ant, warn, &what, live) else { continue };
+                if [e1.0, e2.0][k] != 0xffff {
+                    warn.push(format!("{what} is a stub with an end type this program doesn't know ({}); read as shorted.", [e1.0, e2.0][k]));
+                }
+                // the far end goes on a small wire of its own, shorted across
+                let f = crate::matching::add_feed_wire(ant, lambda, feeds);
+                feeds += 1;
+                (a, (f, 0.5), Some(LoadKind::Rx { r: 1e-6, x: 0.0 }))
+            }
+            None => {
+                let (Some(a), Some(b)) = (port(ant, warn, &what, e1), port(ant, warn, &what, e2)) else { continue };
+                (a, b, None)
+            }
+        };
+        let vf = if vf > 0.0 { vf } else { 1.0 };
+        let length = if len < 0.0 {
+            warn.push(format!("{what}'s length is {:.1}° electrical, fixed as its length at {} MHz.", -len, ant.freq_mhz));
+            -len / 360.0 * lambda * vf
+        } else {
+            len
+        };
+        if stub.is_some() && length <= 0.0 {
+            warn.push(format!("{what} is a stub with no length: skipped."));
+            continue;
+        }
+        let mut t = TLine::new(a.0, a.1, b.0, b.1);
+        t.z0 = z0.abs();
+        t.reversed = z0 < 0.0;
+        t.length = length;
+        t.vf = vf;
+        t.shunt_b = shunt_b;
+        if let Some(&(loss, lf)) = tl_loss.get(i) {
+            if loss > 0.0 {
+                // EZNEC scales the loss with √f from its loss frequency (0 = the same at all)
+                t.loss_db = if lf > 0.0 { loss * (ant.freq_mhz / lf).sqrt() } else { loss };
+                warn.push(format!("{what}'s loss was read as dB/100 m (EZNEC gives it per 100 ft when the model is in feet)."));
+            }
+        }
+        ant.lines.push(t);
+    }
+    for (i, &(e1, e2, [sr, sx, hr, hx])) in lnets.iter().enumerate() {
+        let what = format!("L network {}", i + 1);
+        let (Some(a), Some(b)) = (port(ant, warn, &what, e1), port(ant, warn, &what, e2)) else { continue };
+        let Some(series) = branch(sr, sx) else {
+            warn.push(format!("{what} has an open series branch: skipped."));
+            continue;
+        };
+        let mut t = TLine::new(a.0, a.1, b.0, b.1);
+        t.series = Some(series);
+        // the shunt branch is across port 2
+        t.shunt_b = branch(hr, hx);
+        ant.lines.push(t);
+    }
+    if !lnets.is_empty() {
+        warn.push(format!("L network parts are fixed at their impedance at {} MHz (as EZNEC's R + jX type).", ant.freq_mhz));
+    }
+    for (i, &(e1, e2, z1, z2)) in xfmrs.iter().enumerate() {
+        let what = format!("Transformer {}", i + 1);
+        let (Some(a), Some(b)) = (port(ant, warn, &what, e1), port(ant, warn, &what, e2)) else { continue };
+        if !(z1 > 0.0 && z2 > 0.0) {
+            warn.push(format!("{what} has no port impedances: skipped."));
+            continue;
+        }
+        // tightly coupled windings: magnetising reactance 1000 times and resistance
+        // 1/1000 of each port's impedance, as a pi network
+        type Cx = num_complex::Complex64;
+        let (x1, x2) = (1e3 * z1, 1e3 * z2);
+        let z11 = Cx::new(1e-3 * z1, x1);
+        let z22 = Cx::new(1e-3 * z2, x2);
+        let z12 = Cx::new(0.0, (x1 * x2).sqrt());
+        let det = z11 * z22 - z12 * z12;
+        let (y11, y22, y12) = (z22 / det, z11 / det, -z12 / det);
+        let mut t = TLine::new(a.0, a.1, b.0, b.1);
+        t.series = part(-y12);
+        t.shunt_a = part(y11 + y12);
+        t.shunt_b = part(y22 + y12);
+        ant.lines.push(t);
+    }
 }
 
 struct Wr(Vec<u8>);
@@ -315,7 +506,7 @@ pub fn write(ant: &Antenna) -> Vec<u8> {
         w.f(o + 50, s.pos * 100.0);
         w.f(o + 54, s.volts);
         w.f(o + 58, s.phase_deg);
-        w.u8(o + 62, b'V');
+        w.u8(o + 62, if s.current { b'I' } else { b'V' });
     }
     let f_hz = ant.freq_mhz * 1e6;
     for (i, l) in ant.loads.iter().enumerate() {
@@ -413,7 +604,37 @@ mod tests {
             assert!((b.freq_mhz - a.freq_mhz).abs() < 1e-4);
             assert!((b.wires[0].ins_eps - 3.5).abs() < 1e-6);
             assert!((b.wires[0].r - a.wires[0].r).abs() < 1e-7);
-            assert!((b.sources[0].pos - a.sources[0].pos).abs() < 1e-6);
+            // a source goes to the centre of its EZNEC segment, whose count is doubled
+            let half_seg = 1.0 / b.wires[b.sources[0].wire].seg as f64;
+            assert!((b.sources[0].pos - a.sources[0].pos).abs() <= half_seg + 1e-6, "{} vs {}", b.sources[0].pos, a.sources[0].pos);
+        }
+    }
+
+    #[test]
+    /// EZNEC's own example files (EZ_SAMPLES = its Docs\\Ant folder): arrays fed by
+    /// lines or L networks agree with the same arrays fed by current sources, and a
+    /// log-periodic fed by lines with a shorted stub with the one built of wires.
+    fn eznec_examples_agree() {
+        let dir = std::env::var("EZ_SAMPLES").unwrap_or_default();
+        let open = |n: &str| -> Option<Antenna> {
+            let p = std::path::Path::new(&dir).join(n);
+            p.exists().then(|| parse(&std::fs::read(&p).unwrap(), n).unwrap().ant)
+        };
+        let calc = |a: &Antenna| crate::mom::calculate(a).unwrap().result;
+        for (lines, sources) in [("CardTL.ez", "Cardioid.ez"), ("4sqtl.ez", "4square.ez")] {
+            let (Some(a), Some(b)) = (open(lines), open(sources)) else { continue };
+            assert!(a.lines.len() >= 2 && b.sources.iter().all(|s| s.current));
+            let (ra, rb) = (calc(&a), calc(&b));
+            println!("{lines}: {:.2} dBi F/B {:.1} | {sources}: {:.2} dBi F/B {:.1}", ra.ga_dbi, ra.fb_db, rb.ga_dbi, rb.fb_db);
+            assert!((ra.ga_dbi - rb.ga_dbi).abs() < 0.2 && (ra.fb_db - rb.fb_db).abs() < 1.5);
+        }
+        if let (Some(a), Some(b)) = (open("Logpertl.ez"), open("Logper.ez")) {
+            let (ra, rb) = (calc(&a), calc(&b));
+            assert!((ra.ga_dbi - rb.ga_dbi).abs() < 0.2 && (ra.z - rb.z).norm() < 25.0, "{} / {}", ra.z, rb.z);
+        }
+        if let Some(a) = open("4Square L Network Feed With Z Matching.ez") {
+            assert_eq!((a.lines.len(), a.lines.iter().filter(|t| t.series.is_some()).count()), (7, 3), "4 lines, 2 L networks, 1 transformer");
+            assert!(calc(&a).fb_db > 12.0);
         }
     }
 

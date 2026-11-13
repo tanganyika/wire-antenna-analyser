@@ -132,7 +132,7 @@ fn sig(v: f64) -> String {
 /// A short vertical wire, electrically tiny so that it barely radiates or loads the
 /// feed, beside the antenna: it carries the source, or joins two lines.  `k` keeps
 /// several apart.  Returns its index.
-fn add_feed_wire(ant: &mut Antenna, lambda: f64, k: usize) -> usize {
+pub(crate) fn add_feed_wire(ant: &mut Antenna, lambda: f64, k: usize) -> usize {
     let len = lambda / 200.0;
     let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
     for w in &ant.wires {

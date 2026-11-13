@@ -29,8 +29,14 @@ PVC, polyethylene or PTFE. **Remove all** takes it off again.
 ## Sources
 
 A source is the feed point. Choose the **Wire** and the **Position** on it: begin, centre, end, or
-a custom fraction of the way along. **Phase** and **Volts** matter only when there are several
-sources, as in a phased array. The impedance and SWR shown are for the first source.
+a custom fraction of the way along. **Phase**, **Value** and **Type** matter only when there are
+several sources, as in a phased array. The impedance and SWR shown are for the first source.
+
+**Type** is **voltage** or **current**. A voltage source keeps its voltage (the value in volts),
+and a current source its current (the value in amps), whatever impedance it meets. Phased arrays
+are usually designed for given currents in their elements, so feed them with current sources.
+With current sources, each calculation solves the antenna once per source first, to find the
+voltages that give those currents, so it takes a little longer.
 
 ## Loads
 

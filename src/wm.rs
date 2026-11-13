@@ -476,7 +476,7 @@ mod tests {
             let mut a = with(0, Engine::Wiremom);
             a.wires.push(Wire::new([0.0, 0.0, 20.0], [0.0, 0.0, 20.05], 0.001));
             a.wires[1].seg = 3;
-            a.sources = vec![Source { wire: 1, pos: 0.5, phase_deg: 0.0, volts: 1.0 }];
+            a.sources = vec![Source { wire: 1, pos: 0.5, phase_deg: 0.0, volts: 1.0, current: false }];
             let mut t = TLine::new(1, 0.5, 0, 0.5);
             t.z0 = 75.0;
             t.length = len;
@@ -509,7 +509,7 @@ mod tests {
         a.material = Material::Lossless;
         a.wires = vec![Wire::new([0.1, 0.2, 0.0], [0.1, 0.2, 0.24], 0.002)];
         a.wires[0].seg = 12;
-        a.sources = vec![Source { wire: 0, pos: 0.0, phase_deg: 0.0, volts: 1.0 }];
+        a.sources = vec![Source { wire: 0, pos: 0.0, phase_deg: 0.0, volts: 1.0, current: false }];
         a.plates = vec![Plate::new([-0.5, -0.5, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])];
         let r = mom::calculate(&a).unwrap().result;
         println!("monopole on a plate: Z={:.2} Ga={:.2} el={}", r.z, r.ga_dbi, r.el_max);

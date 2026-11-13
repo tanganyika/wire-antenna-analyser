@@ -88,6 +88,11 @@ gain of about 0.9 dBi, rather than the 5.6 dBi it would have over perfect ground
 to judge how much power reaches the sky, and NEC efficiency to compare with figures from NEC
 programs or to judge the loss in the antenna itself.
 
+If the gain averaged over all directions comes to well over 100 % of the input power,
+Radiated and Ground show **—** and a note explains. That happens when almost no power gets into
+the antenna (an open feed, for example a feed line left out), and then the gain isn't reliable
+either.
+
 ### Checking the model
 
 In free space and over perfect ground, the parts should add up to 100 %. If they are a long way

@@ -60,7 +60,12 @@ pub struct Source {
     /// Position along the wire, 0 = begin, 0.5 = centre, 1 = end.
     pub pos: f64,
     pub phase_deg: f64,
+    /// Volts, or amps for a current source.
     pub volts: f64,
+    /// A current source: it keeps its current (amps, at this phase) whatever the
+    /// impedance, as phased arrays are usually fed. Only matters with several sources.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -556,13 +561,13 @@ impl Antenna {
             user_mu: 1.0,
             engine: Engine::Wiremom,
         };
-        let src = |w| Source { wire: w, pos: 0.5, phase_deg: 0.0, volts: 1.0 };
+        let src = |w| Source { wire: w, pos: 0.5, phase_deg: 0.0, volts: 1.0, current: false };
         match i {
             1 => {
                 let mut a = base("Inverted V for 7.1 MHz", 7.1);
                 a.wires.push(Wire::new([0.0, 0.0, 12.0], [0.0, -9.0, 7.5], 1.0e-3));
                 a.wires.push(Wire::new([0.0, 0.0, 12.0], [0.0, 9.0, 7.5], 1.0e-3));
-                a.sources.push(Source { wire: 0, pos: 0.0, phase_deg: 0.0, volts: 1.0 });
+                a.sources.push(Source { wire: 0, pos: 0.0, phase_deg: 0.0, volts: 1.0, current: false });
                 a.ground = real(0.0);
                 a
             }
@@ -580,7 +585,7 @@ impl Antenna {
             3 => {
                 let mut a = base("Quarter-wave vertical for 7.1 MHz", 7.1);
                 a.wires.push(Wire::new([0.0, 0.0, 0.0], [0.0, 0.0, 10.2], 5.0e-3));
-                a.sources.push(Source { wire: 0, pos: 0.0, phase_deg: 0.0, volts: 1.0 });
+                a.sources.push(Source { wire: 0, pos: 0.0, phase_deg: 0.0, volts: 1.0, current: false });
                 a.ground = Ground { kind: GroundKind::Perfect, ..real(0.0) };
                 a
             }
@@ -594,7 +599,7 @@ impl Antenna {
                     let _ = d;
                     a.wires.push(Wire::new([0.0, 0.0, 0.0], [x * 2.35, y * 2.35, drop], r));
                 }
-                a.sources.push(Source { wire: 0, pos: 0.0, phase_deg: 0.0, volts: 1.0 });
+                a.sources.push(Source { wire: 0, pos: 0.0, phase_deg: 0.0, volts: 1.0, current: false });
                 a
             }
             5 => {
@@ -629,7 +634,7 @@ impl Default for Wire {
 }
 impl Default for Source {
     fn default() -> Self {
-        Source { wire: 0, pos: 0.5, phase_deg: 0.0, volts: 1.0 }
+        Source { wire: 0, pos: 0.5, phase_deg: 0.0, volts: 1.0, current: false }
     }
 }
 impl Default for Load {

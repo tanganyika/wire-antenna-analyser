@@ -143,7 +143,7 @@ pub fn parse(text: &str) -> Result<Antenna, String> {
                     continue;
                 }
                 if let Some((w, p)) = v.first().and_then(|s| parse_pos(s)) {
-                    ant.sources.push(Source { wire: w, pos: p, phase_deg: f(v.get(1), 0.0), volts: f(v.get(2), 1.0) });
+                    ant.sources.push(Source { wire: w, pos: p, phase_deg: f(v.get(1), 0.0), volts: f(v.get(2), 1.0), current: false });
                 }
             }
             "load" => {

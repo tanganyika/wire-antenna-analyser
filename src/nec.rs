@@ -497,6 +497,8 @@ fn table<'a>(text: &'a str, heading: &str, skip: usize) -> Vec<Vec<&'a str>> {
 
 struct Report {
     z: num_complex::Complex64,
+    /// every source's impedance, in the order of the EX cards
+    z_all: Vec<num_complex::Complex64>,
     seg_cur: Vec<f64>,
     /// (theta, phi, vert dB, hor dB, total dB)
     pattern: Vec<[f64; 5]>,
@@ -528,10 +530,11 @@ fn parse(text: &str) -> Result<Report, String> {
     let inp = table(text, "ANTENNA INPUT PARAMETERS", 2);
     // the first line of figures: NEC-5 has a blank line more than NEC-2 above the headings
     let block = inp.first().ok_or("NEC gave no input impedance.")?;
-    let n = block.iter().map(|r| numbers(r)).find(|n| n.len() >= 11).ok_or("NEC's input impedance couldn't be read.")?;
     // counted from the end: NEC-5 adds a source-type column after the segment number
     // (TAG SEG [TYPE] V I Z Y POWER)
-    let z = num_complex::Complex64::new(n[n.len() - 5], n[n.len() - 4]);
+    let z_all: Vec<num_complex::Complex64> =
+        block.iter().map(|r| numbers(r)).filter(|n| n.len() >= 11).map(|n| num_complex::Complex64::new(n[n.len() - 5], n[n.len() - 4])).collect();
+    let z = *z_all.first().ok_or("NEC's input impedance couldn't be read.")?;
     // NEC-2: "CURRENTS AND LOCATION"; NEC-5: "Wire Currents" with a note on the lengths
     // above the headings. Both have the magnitude in the ninth field.
     let seg_cur = table(text, "CURRENTS AND LOCATION", 4)
@@ -550,7 +553,7 @@ fn parse(text: &str) -> Result<Report, String> {
         }
     }
     let (p_in, losses) = power_budget(text);
-    Ok(Report { z, seg_cur, pattern, p_in, losses })
+    Ok(Report { z, z_all, seg_cur, pattern, p_in, losses })
 }
 
 fn lin(db: f64) -> f64 {
@@ -638,6 +641,12 @@ pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) ->
     let rps = if need_far { vec![grid_rp(grounded).0] } else { vec![] };
     let rep = run_deck(ant, &lay, freq_mhz, &rps)?;
     Ok(result(ant, freq_mhz, &lay, &rep, need_far, t.elapsed().as_secs_f64() * 1e3).0)
+}
+
+/// Every source's impedance (no pattern), for working out current sources.
+pub fn source_impedances(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64) -> Result<Vec<num_complex::Complex64>, String> {
+    let lay = layout(ant, 299.792458 / seg_freq_mhz);
+    Ok(run_deck(ant, &lay, freq_mhz, &[])?.z_all)
 }
 
 /// Full calculation for the Calculate tab: a 3° grid (3D pattern, maximum, F/B), then 1° cuts.

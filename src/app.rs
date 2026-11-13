@@ -147,6 +147,11 @@ pub(crate) fn not_saved(ant: &Antenna, is_ez: bool, is_nec: bool) -> Vec<String>
     if is_ez && ant.ground.second.enabled && ant.ground.kind != GroundKind::Free {
         v.push("the second ground (sea, marsh or other ground nearby)".into());
     }
+    // MMANA has voltage sources only (EZNEC files keep current sources)
+    let cur = ant.sources.iter().filter(|s| s.current).count();
+    if !is_ez && cur > 0 && ant.sources.len() > 1 {
+        v.push(format!("{} (saved as voltage sources)", n(cur, "current source", "current sources")));
+    }
     v
 }
 
@@ -1093,12 +1098,12 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.heading("Sources");
                     if ui.button("➕ Add").clicked() {
-                        self.ant.sources.push(Source { wire: 0, pos: 0.5, phase_deg: 0.0, volts: 1.0 });
+                        self.ant.sources.push(Source { wire: 0, pos: 0.5, phase_deg: 0.0, volts: 1.0, current: false });
                     }
                 });
                 let mut del = None;
                 egui::Grid::new("sources").striped(true).show(ui, |ui| {
-                    for h in ["Wire", "Position", "Phase (°)", "Volts", ""] {
+                    for h in ["Wire", "Position", "Phase (°)", "Value", "Type", ""] {
                         ui.label(RichText::new(h).strong());
                     }
                     ui.end_row();
@@ -1106,7 +1111,16 @@ impl App {
                         wire_pick(ui, ("sw", i), &mut s.wire, nw);
                         pos_pick(ui, ("sp", i), &mut s.pos);
                         ui.add(egui::DragValue::new(&mut s.phase_deg).speed(1.0).range(-360.0..=360.0));
-                        ui.add(egui::DragValue::new(&mut s.volts).speed(0.01).range(0.0..=1e6));
+                        ui.add(egui::DragValue::new(&mut s.volts).speed(0.01).range(0.0..=1e6).suffix(if s.current { " A" } else { " V" }));
+                        egui::ComboBox::from_id_salt(("st", i))
+                            .selected_text(if s.current { "current" } else { "voltage" })
+                            .width(70.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut s.current, false, "voltage");
+                                ui.selectable_value(&mut s.current, true, "current");
+                            })
+                            .response
+                            .on_hover_text("With several sources: a voltage source keeps its voltage, a current source its current (amps at this phase), as phased arrays are usually fed. With one source it makes no difference.");
                         if ui.small_button("🗑").clicked() {
                             del = Some(i);
                         }
@@ -2280,6 +2294,9 @@ mod tests {
         assert_eq!(not_saved(&a, true, false), vec!["the second ground (sea, marsh or other ground nearby)".to_string()]);
         assert!(not_saved(&a, false, false).is_empty(), ".maa keeps the second ground");
         assert!(not_saved(&a, false, true).is_empty());
+        a.sources.push(Source { wire: 0, pos: 0.25, phase_deg: 90.0, volts: 1.0, current: true });
+        assert_eq!(not_saved(&a, false, false), vec!["1 current source (saved as voltage sources)".to_string()]);
+        assert!(not_saved(&a, true, false).iter().all(|s| !s.contains("current")), ".ez keeps current sources");
         a.ground.kind = GroundKind::Free;
         assert!(not_saved(&a, true, false).is_empty(), "no second ground in free space");
     }

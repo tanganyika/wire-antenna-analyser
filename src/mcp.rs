@@ -668,7 +668,7 @@ fn tools() -> Value {
         },
         {
             "name": "get_antenna",
-            "description": "Returns the current antenna as JSON: wires (p1, p2 in m, radius r in m, seg <= 0 = automatic, insulation ins_t/ins_eps), sources, loads (type rx / lc / rlc), transmission lines, plates, ground (kind free/perfect/real, eps_r, sigma_ms, add_height), material, z0 for SWR, segmentation and engine.",
+            "description": "Returns the current antenna as JSON: wires (p1, p2 in m, radius r in m, seg <= 0 = automatic, insulation ins_t/ins_eps), sources (current: true = a current source, volts then in amps), loads (type rx / lc / rlc), transmission lines, plates, ground (kind free/perfect/real, eps_r, sigma_ms, add_height), material, z0 for SWR, segmentation and engine.",
             "inputSchema": { "type": "object", "properties": {} },
             "annotations": ro,
         },

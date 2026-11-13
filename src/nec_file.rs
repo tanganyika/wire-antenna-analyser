@@ -200,6 +200,9 @@ struct Extras {
     wire_seg: Vec<i32>,
     /// exact places of the sources and loads (NEC puts them at segment centres)
     source_pos: Vec<f64>,
+    /// which sources are current sources (NEC-2 has voltage sources only)
+    #[serde(default)]
+    source_current: Vec<bool>,
     load_pos: Vec<f64>,
 }
 
@@ -564,7 +567,7 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
                 None
             })?;
             let v = num_complex::Complex64::new(vr, vi);
-            Some(Source { wire: w, pos, phase_deg: v.arg().to_degrees(), volts: v.norm() })
+            Some(Source { wire: w, pos, phase_deg: v.arg().to_degrees(), volts: v.norm(), current: false })
         })
         .collect();
     ant.loads.clear();
@@ -684,6 +687,11 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
                 }
             }
         }
+        if x.source_current.len() == ant.sources.len() {
+            for (s, c) in ant.sources.iter_mut().zip(&x.source_current) {
+                s.current = *c;
+            }
+        }
         if x.source_pos.len() == ant.sources.len() {
             for (s, p) in ant.sources.iter_mut().zip(&x.source_pos) {
                 s.pos = *p;
@@ -733,6 +741,7 @@ pub fn write(ant: &Antenna) -> String {
         seg: ant.seg.clone(),
         wire_seg: ant.wires.iter().map(|w| w.seg).collect(),
         source_pos: ant.sources.iter().map(|s| s.pos).collect(),
+        source_current: ant.sources.iter().map(|s| s.current).collect(),
         load_pos: ant.loads.iter().map(|l| l.pos).collect(),
     };
     cm(&mut o, &format!("{EXTRAS}{}", serde_json::to_string(&extras).unwrap_or_default()));
@@ -947,6 +956,7 @@ mod tests {
             a.fb_az = 90.0;
             a.comment = format!("two\nlines, the second  long: {}", "word ".repeat(40) + &"x".repeat(200));
             a.loads.push(Load { wire: 0, pos: 0.0, kind: LoadKind::Rx { r: 5.0, x: 0.0 } });
+            a.sources[0].current = true;
             a.seg.dm1 = 300.0;
             let mut b = parse(&write(&a), "x").unwrap().ant;
             if a.ground.kind != GroundKind::Free {

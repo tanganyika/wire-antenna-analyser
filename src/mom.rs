@@ -922,6 +922,8 @@ pub fn empty_mesh() -> Mesh {
 }
 
 pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) -> Result<(CalcResult, Mesh, Solution, Option<Radiator>), String> {
+    let resolved = resolve_current_sources(ant, freq_mhz, seg_freq_mhz)?;
+    let ant = resolved.as_ref().unwrap_or(ant);
     match ant.engine {
         Engine::Nec2 | Engine::External => {
             let r = crate::nec::quick(ant, freq_mhz, seg_freq_mhz, need_far)?;
@@ -987,7 +989,99 @@ pub fn summarize(ant: &Antenna, freq_mhz: f64, t0: Instant, sol: &Solution, rad:
     }
 }
 
+/// Every source's impedance with the antenna as it is (all sources as voltage sources).
+fn source_impedances(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64) -> Result<Vec<C>, String> {
+    match ant.engine {
+        Engine::Nec2 | Engine::External => crate::nec::source_impedances(ant, freq_mhz, seg_freq_mhz),
+        Engine::Wiremom => Ok(crate::wm::quick(ant, freq_mhz, seg_freq_mhz, false)?.1.z_in),
+        Engine::Mininec => {
+            let mesh = build_mesh(ant, 299.792458 / seg_freq_mhz)?;
+            Ok(solve(ant, &mesh, freq_mhz)?.z_in)
+        }
+    }
+}
+
+/// With several sources of which some are current sources, the same antenna with only
+/// voltage sources, set to drive the specified currents (None when there is nothing
+/// to do: a single source's type changes nothing but the scale).
+///
+/// The sources' admittance matrix Y (I = Y V) comes from n solves, each driving every
+/// source at 1 V but one at 2 V (independent voltage sets, none of them zero, so every
+/// engine reports every source's impedance and I = V / Z). Then the current sources'
+/// voltages solve Y_cc V_c = I_c − Y_cv V_v.
+pub fn resolve_current_sources(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64) -> Result<Option<Antenna>, String> {
+    let n = ant.sources.len();
+    if n < 2 || !ant.sources.iter().any(|s| s.current) {
+        return Ok(None);
+    }
+    // columns j: the currents with V = 1 + δ_jk
+    let cols: Vec<Vec<C>> = (0..n)
+        .into_par_iter()
+        .map(|j| {
+            let mut a = ant.clone();
+            for (k, s) in a.sources.iter_mut().enumerate() {
+                s.current = false;
+                s.phase_deg = 0.0;
+                s.volts = if k == j { 2.0 } else { 1.0 };
+            }
+            let z = source_impedances(&a, freq_mhz, seg_freq_mhz)?;
+            if z.len() != n {
+                return Err(format!("The engine reported {} of the {n} sources.", z.len()));
+            }
+            Ok(z.iter().zip(&a.sources).map(|(z, s)| if z.norm().is_finite() && z.norm() > 0.0 { C::new(s.volts, 0.0) / z } else { C::new(0.0, 0.0) }).collect())
+        })
+        .collect::<Result<_, String>>()?;
+    // Y = I_mat · V_mat⁻¹, V_mat = 1 + J (all ones plus identity): V_mat⁻¹ = 1 − J/(n+1)
+    let y = |k: usize, m: usize| -> C { (0..n).map(|j| cols[j][k] * (if j == m { 1.0 } else { 0.0 } - 1.0 / (n as f64 + 1.0))).sum() };
+    let given = |s: &Source| C::from_polar(s.volts, s.phase_deg.to_radians());
+    let cur: Vec<usize> = (0..n).filter(|&k| ant.sources[k].current).collect();
+    let nc = cur.len();
+    let mut a = vec![C::new(0.0, 0.0); nc * nc];
+    let mut b = vec![C::new(0.0, 0.0); nc];
+    for (r, &k) in cur.iter().enumerate() {
+        for (c, &m) in cur.iter().enumerate() {
+            a[r * nc + c] = y(k, m);
+        }
+        b[r] = given(&ant.sources[k]) - (0..n).filter(|m| !ant.sources[*m].current).map(|m| y(k, m) * given(&ant.sources[m])).sum::<C>();
+    }
+    lu_solve(&mut a, &mut b, nc).map_err(|_| "The current sources can't all be driven at once (their admittance matrix is singular).".to_string())?;
+    let mut out = ant.clone();
+    for (&k, v) in cur.iter().zip(&b) {
+        let s = &mut out.sources[k];
+        s.current = false;
+        s.volts = v.norm();
+        s.phase_deg = v.arg().to_degrees();
+    }
+    Ok(Some(out))
+}
+
 pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
+    let resolved = resolve_current_sources(ant, ant.freq_mhz, ant.freq_mhz)?;
+    let ant = resolved.as_ref().unwrap_or(ant);
+    let mut r = calculate_with(ant)?;
+    // gain is relative to the input power: when hardly any gets in (an open feed), it
+    // and the pattern's average are noise
+    let rad = r.power.radiated;
+    if !(rad <= MAX_RADIATED) {
+        r.warnings.push(format!(
+            "The gain averaged over all directions comes to {} of the input power, which can't be right: almost no power gets into the antenna (feed impedance {:.0} {} j{:.0} Ω), or the model has a problem. The efficiency can't be worked out, and the gain isn't reliable.",
+            if rad.is_finite() { pct(rad) } else { "an impossible amount".into() },
+            r.result.z.re,
+            if r.result.z.im < 0.0 { "−" } else { "+" },
+            r.result.z.im.abs()
+        ));
+        r.power.radiated = f64::NAN;
+        r.power.ground = None;
+        r.result.eff = f64::NAN;
+    }
+    Ok(r)
+}
+
+/// Above this the radiated share is taken as meaningless (see `calculate`). NEC-2 can
+/// give a few percent over 100 % on models that fail its average gain test.
+pub const MAX_RADIATED: f64 = 1.10;
+
+fn calculate_with(ant: &Antenna) -> Result<FullResult, String> {
     match ant.engine {
         Engine::Nec2 | Engine::External => return crate::nec::calculate(ant),
         Engine::Wiremom => return crate::wm::calculate(ant),
@@ -1181,6 +1275,66 @@ mod fb_range {
         }
     }
 }
+#[cfg(test)]
+mod current_source_tests {
+    use super::*;
+
+    /// Two dipoles a quarter wave apart, fed 1 A at 0° and 1 A at −90°.
+    fn pair(e: Engine) -> Antenna {
+        let mut a = Antenna::example(0);
+        a.engine = e;
+        let mut w = a.wires[0].clone();
+        w.p1[0] += a.lambda() / 4.0;
+        w.p2[0] += a.lambda() / 4.0;
+        a.wires.push(w);
+        a.sources = vec![
+            Source { wire: 0, pos: 0.5, phase_deg: 0.0, volts: 1.0, current: true },
+            Source { wire: 1, pos: 0.5, phase_deg: -90.0, volts: 1.0, current: true },
+        ];
+        a
+    }
+
+    #[test]
+    fn current_sources_drive_the_given_currents() {
+        let mut engines = vec![Engine::Wiremom, Engine::Mininec];
+        if crate::nec::available() {
+            engines.push(Engine::Nec2);
+        }
+        for e in engines {
+            let a = pair(e);
+            let v = resolve_current_sources(&a, a.freq_mhz, a.freq_mhz).unwrap().unwrap();
+            let z = source_impedances(&v, a.freq_mhz, a.freq_mhz).unwrap();
+            for (k, s) in v.sources.iter().enumerate() {
+                let i = C::from_polar(s.volts, s.phase_deg.to_radians()) / z[k];
+                let want = C::from_polar(1.0, a.sources[k].phase_deg.to_radians());
+                assert!((i - want).norm() < 1e-3, "{e:?} source {k}: {i} instead of {want}");
+            }
+            // the classic quarter-wave, 90° pair beams towards the lagging element
+            let r = calculate(&a).unwrap().result;
+            assert!(r.fb_db > 6.0, "{e:?} F/B {}", r.fb_db);
+        }
+    }
+
+    #[test]
+    fn a_single_current_source_changes_nothing() {
+        let mut a = Antenna::example(0);
+        a.sources[0].current = true;
+        assert!(resolve_current_sources(&a, a.freq_mhz, a.freq_mhz).unwrap().is_none());
+    }
+
+    #[test]
+    fn current_and_voltage_sources_together() {
+        let mut a = pair(Engine::Wiremom);
+        a.sources[0].current = false;
+        a.sources[0].volts = 2.0;
+        let v = resolve_current_sources(&a, a.freq_mhz, a.freq_mhz).unwrap().unwrap();
+        assert_eq!((v.sources[0].volts, v.sources[0].phase_deg), (2.0, 0.0));
+        let z = source_impedances(&v, a.freq_mhz, a.freq_mhz).unwrap();
+        let i1 = C::from_polar(v.sources[1].volts, v.sources[1].phase_deg.to_radians()) / z[1];
+        assert!((i1 - C::from_polar(1.0, -90f64.to_radians())).norm() < 1e-3, "{i1}");
+    }
+}
+
 #[cfg(test)]
 mod power_tests {
     use super::*;

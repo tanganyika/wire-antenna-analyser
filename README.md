@@ -24,7 +24,8 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
     another NEC program, as EZNEC does; see [Using your own NEC-4 or NEC-5](#using-your-own-nec-4-or-nec-5).
 - **Files:** open and save MMANA `.maa`, NEC `.nec`
   (including 4nec2 `SY` symbols, helices, arcs, GM/GR/GX, `TL` lines and `SM`/`SC`
-  plates), and EZNEC `.ez`.
+  plates), and EZNEC `.ez` (with its transmission lines, stubs, L networks,
+  transformers and current sources).
 - **Tabs:**
   - Geometry;
   - View:
@@ -54,7 +55,7 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
 - **Efficiency and power budget:** each calculation shows how much of the input
   power is radiated and how much is lost in the wires, loads, lines and the ground
   (Calculate tab, report and MCP), on every engine.
-- **Modelling:** wire materials, lumped loads (R+jX, L/C/Q traps, series/parallel
+- **Modelling:** wire materials, voltage and current sources, lumped loads (R+jX, L/C/Q traps, series/parallel
   RLC), wire insulation (velocity factor), free / perfect / real ground, F/B rear
   range.
 - **Transmission lines (wiremom and NEC-2 engines):** feed lines, phasing lines and
