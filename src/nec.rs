@@ -504,14 +504,18 @@ struct Report {
 
 fn parse(text: &str) -> Result<Report, String> {
     let inp = table(text, "ANTENNA INPUT PARAMETERS", 2);
-    let first = inp.first().and_then(|b| b.first()).ok_or("NEC-2 gave no input impedance.")?;
-    let n = numbers(first);
-    if n.len() < 8 {
-        return Err("NEC-2 input impedance couldn't be read.".into());
-    }
-    let z = num_complex::Complex64::new(n[6], n[7]);
+    // the first line of figures: NEC-5 has a blank line more than NEC-2 above the headings
+    let block = inp.first().ok_or("NEC gave no input impedance.")?;
+    let n = block.iter().map(|r| numbers(r)).find(|n| n.len() >= 11).ok_or("NEC's input impedance couldn't be read.")?;
+    // counted from the end: NEC-5 adds a source-type column after the segment number
+    // (TAG SEG [TYPE] V I Z Y POWER)
+    let z = num_complex::Complex64::new(n[n.len() - 5], n[n.len() - 4]);
+    // NEC-2: "CURRENTS AND LOCATION"; NEC-5: "Wire Currents" with a note on the lengths
+    // above the headings. Both have the magnitude in the ninth field.
     let seg_cur = table(text, "CURRENTS AND LOCATION", 4)
-        .first()
+        .into_iter()
+        .chain(table(text, "- Wire Currents -", 5))
+        .next()
         .map(|rows| rows.iter().map(|r| numbers(r)).filter(|v| v.len() >= 10).map(|v| v[8]).collect())
         .unwrap_or_default();
     let mut pattern = Vec::new();
@@ -727,6 +731,31 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A real NEC-5 report (NEC5CL x13) for the free-space dipole deck, cut to the parts
+    /// parse() reads, as Windows writes it.
+    #[test]
+    fn reads_nec5_report() {
+        let text = include_str!("testdata/nec5-dipole-free.out").replace('\n', "\r\n");
+        let r = parse(&text).unwrap();
+        assert!((r.z.re - 72.107).abs() < 1e-3 && (r.z.im + 6.5389).abs() < 1e-4, "{}", r.z);
+        assert_eq!(r.seg_cur.len(), 21);
+        assert!((r.seg_cur[10] - 1.38029e-2).abs() < 1e-7);
+        assert_eq!(r.pattern.len(), 18);
+        assert_eq!(r.pattern[0], [0.0, 0.0, -999.99, 2.09, 2.09]);
+    }
+
+    /// NEC-5's input row has a source-type column (2 = current source, EX 4); NEC-2's hasn't.
+    #[test]
+    fn input_impedance_in_both_layouts() {
+        let head = "  - - - ANTENNA INPUT PARAMETERS - - -\n  TAG\n  NO.\n";
+        let nec5 = format!("{head}   2    11 2  7.1656E+01 -6.9194E+00  1.0000E+00  0.0000E+00  7.1656E+01 -6.9194E+00  1.3827E-02  1.3352E-03  3.5828E+01\n");
+        let z = parse(&nec5).unwrap().z;
+        assert!((z.re - 71.656).abs() < 1e-3 && (z.im + 6.9194).abs() < 1e-4);
+        let nec2 = format!("{head}     1    11 1.0000E+00 0.0000E+00 1.3713E-02-7.7337E-05 7.2919E+01 4.1125E-01 1.3713E-02-7.7337E-05 6.8566E-03\n");
+        let z = parse(&nec2).unwrap().z;
+        assert!((z.re - 72.919).abs() < 1e-3 && (z.im - 0.41125).abs() < 1e-5);
+    }
     #[test]
     fn nec_matches_builtin_roughly() {
         if !available() {
