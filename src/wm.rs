@@ -99,7 +99,10 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<(Model, Vec<us
             radius: w.r.abs(),
             segments: Segments::Lengths(lens),
             conductor,
-            series_l_per_m: w.insulation_l_per_m(),
+            series_l_per_m: 0.0,
+            // the sleeve as such: wiremom treats it for the medium the wire is in
+            // (air, or the soil for buried and surface wires)
+            insulation: w.insulated().then_some(wiremom::Insulation { thickness: w.ins_t, eps_r: w.ins_eps }),
         });
     }
     let surfaces: Vec<Surface> = ant.plates.iter().map(|p| plate_surface(p, &wires, dz, lambda)).collect();
@@ -287,6 +290,32 @@ fn view_mesh(ant: &Antenna, ws: &wiremom::Solution, app_wire: &[usize]) -> mom::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Insulation reaches wiremom for wires in the soil: on four radials lying on
+    /// average ground it changes the result (a little; see wiremom's tests/insulated.rs
+    /// for the physics), and the power still balances.
+    #[test]
+    fn insulated_surface_radials() {
+        let mut a = Antenna::example(3);
+        a.engine = Engine::Wiremom;
+        a.ground.kind = GroundKind::Real;
+        let l = a.wires[0].length();
+        for k in 0..4 {
+            let t = k as f64 * std::f64::consts::FRAC_PI_2;
+            let mut w = Wire::new([0.0, 0.0, 0.0], [l * t.cos(), l * t.sin(), 0.0], 0.001);
+            w.seg = -1;
+            a.wires.push(w);
+        }
+        let bare = mom::calculate(&a).unwrap();
+        for w in &mut a.wires[1..] {
+            w.ins_t = 0.001;
+            w.ins_eps = 3.5;
+        }
+        let ins = mom::calculate(&a).unwrap();
+        println!("bare {:.2} {} | insulated {:.2} {}", bare.result.z, bare.power.line(), ins.result.z, ins.power.line());
+        assert!((ins.result.z - bare.result.z).norm() > 0.5, "insulation must change something");
+        assert!(ins.power.ground.unwrap() > 0.2 && ins.result.eff.is_finite());
+    }
 
     fn with(i: usize, e: Engine) -> Antenna {
         let mut a = Antenna::example(i);

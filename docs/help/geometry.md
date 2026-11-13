@@ -17,7 +17,10 @@ Each row is one straight wire:
 - **Length (m)**: worked out from the ends.
 - **Insulation (mm)**, **εr**: the thickness of the insulation and its relative permittivity. Insulation
   slows the wave on the wire, so an insulated wire resonates lower than a bare one. **VF** shows the
-  velocity factor this gives.
+  velocity factor this gives in air. With the wiremom engine, insulation on wires in the ground or
+  lying on it (buried or surface radials) is modelled for the soil around it. There the sleeve
+  keeps the wire out of contact with the soil and slows the wave much more, so an insulated buried
+  wire resonates far shorter than in air. The other engines treat insulation as it acts in air.
 - 🗑 deletes the wire. Any sources and loads on it go with it.
 
 Wires connect where their ends meet exactly, within a micrometre. A wire end at Z = 0 over
