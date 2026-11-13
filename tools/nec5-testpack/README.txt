@@ -1,5 +1,5 @@
 NEC-5 test pack for wireant
-=========================================
+===========================
 
 Thank you for trying this. It runs your NEC-5 on ten small test decks and collects what NEC-5
 writes, so that wireant can learn to read NEC-5's output. Your NEC-5 program stays
