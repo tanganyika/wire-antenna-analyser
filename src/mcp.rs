@@ -291,6 +291,83 @@ impl Server {
                     "wires": wires,
                 })
             }
+            "report" => {
+                let ant = self.with_options(a)?;
+                let p = match a.get("path").and_then(Value::as_str) {
+                    Some(p) => PathBuf::from(p),
+                    None => match &self.path {
+                        Some(src) => {
+                            let (dir, name) = crate::app::report_target(Some(src), None);
+                            dir.map(|d| d.join(&name)).unwrap_or_else(|| PathBuf::from(name))
+                        }
+                        None => return fail("No path given and the antenna hasn't been opened from or saved to a file.".into()),
+                    },
+                };
+                let p = if p.extension().is_none() { p.with_extension("pdf") } else { p };
+
+                let calc = mom::calculate(&ant).map_err(CallError::Failed)?;
+                let mut st = crate::tools::ToolsState::default();
+                st.for_antenna(&ant);
+                // the match calculator starts from this calculation, as Tools → Match calculator does
+                st.m_f = calc.result.freq_mhz;
+                st.m_r = calc.result.z.re;
+                st.m_x = calc.result.z.im;
+                if a.get("resonances").and_then(Value::as_bool).unwrap_or(true) {
+                    if let Some(f0) = a.get("res_f_start_mhz").and_then(Value::as_f64) {
+                        st.res_f0 = f0;
+                    }
+                    if let Some(f1) = a.get("res_f_stop_mhz").and_then(Value::as_f64) {
+                        st.res_f1 = f1;
+                    }
+                    if !(st.res_f0 > 0.0 && st.res_f1 > st.res_f0) {
+                        return fail("The resonance range must be above 0 MHz with the stop above the start.".into());
+                    }
+                    if let Some(n) = a.get("res_points").and_then(Value::as_u64) {
+                        st.res_steps = n.clamp(5, 1001) as usize;
+                    }
+                    if let Some(l) = a.get("swr_limit").and_then(Value::as_f64) {
+                        st.res_limit = l.max(1.01);
+                    }
+                    let rep = crate::tools::find(&ant, st.res_f0, st.res_f1, st.res_steps, st.res_limit).map_err(CallError::Failed)?;
+                    // mark the resonance nearest the antenna's frequency
+                    st.sel = rep
+                        .resonances
+                        .iter()
+                        .enumerate()
+                        .min_by(|x, y| (x.1.f_mhz - ant.freq_mhz).abs().total_cmp(&(y.1.f_mhz - ant.freq_mhz).abs()))
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    st.report = Some(rep);
+                }
+
+                let history = [calc.result.clone()];
+                let bytes = crate::report::build(&ant, self.path.as_deref(), Some(&calc), &history, &st, &crate::plots::ViewState::default());
+                std::fs::write(&p, bytes).map_err(|e| CallError::Failed(format!("Couldn't save {}: {e}", p.display())))?;
+
+                let mut v = json!({ "saved": p, "calculation": result_json(&calc.result) });
+                v["calculation"]["warnings"] = json!(calc.warnings);
+                if let Some(rep) = &st.report {
+                    let bw = |b: Option<(f64, f64)>| b.map(|(lo, hi)| json!({ "from_mhz": lo, "to_mhz": hi, "width_khz": (hi - lo) * 1000.0 }));
+                    v["resonances"] = json!({
+                        "f_start_mhz": st.res_f0,
+                        "f_stop_mhz": st.res_f1,
+                        "points": st.res_steps,
+                        "swr_limit": rep.limit,
+                        "found": rep.resonances.iter().map(|r| json!({
+                            "freq_mhz": r.f_mhz,
+                            "type": if r.series { "series" } else { "parallel" },
+                            "r_ohm": r.z.re,
+                            "x_ohm": r.z.im,
+                            "swr": fin(r.swr),
+                            "bandwidth": bw(r.bw_ref),
+                            "bandwidth_matched": bw(r.bw_matched),
+                            "q": fin(r.q),
+                        })).collect::<Vec<_>>(),
+                        "lowest_swr": { "freq_mhz": rep.min_swr.0, "swr": fin(rep.min_swr.1) },
+                    });
+                }
+                v
+            }
             _ => return Err(CallError::Unknown),
         })
     }
@@ -654,6 +731,21 @@ fn tools() -> Value {
                 "engine": engine_prop(),
             }, "required": ["variables"] },
         },
+        {
+            "name": "report",
+            "description": "Writes the program's PDF antenna report (as Tools → Antenna report in the program): the antenna and its picture, a calculation with its patterns, the resonance finder's results with SWR and impedance plots, and matching networks for the calculated impedance. Calculates and searches for resonances itself; returns the path, the calculation and the resonances found.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string", "description": "Absolute path of the PDF; default: next to the antenna's file, with its name and .pdf." },
+                "engine": engine_prop(),
+                "freq_mhz": freq_prop(),
+                "resonances": { "type": "boolean", "description": "Run the resonance finder (default true)." },
+                "res_f_start_mhz": { "type": "number", "description": "Resonance search start (default 15% below the antenna's frequency)." },
+                "res_f_stop_mhz": { "type": "number", "description": "Resonance search stop (default 15% above)." },
+                "res_points": { "type": "integer", "minimum": 5, "maximum": 1001, "description": "Sweep points for the search (default 31)." },
+                "swr_limit": { "type": "number", "description": "SWR for the bandwidth figures (default 2)." },
+            } },
+            "annotations": { "destructiveHint": true },
+        },
     ])
 }
 
@@ -697,6 +789,18 @@ mod tests {
         tool(&mut s, "new_antenna", json!({ "example": 2 }));
         tool(&mut s, "open_file", json!({ "path": p }));
         assert_eq!(s.ant.wires, Antenna::example(0).wires);
+
+        // the PDF report, next to the antenna's file by default
+        let rep = tool(&mut s, "report", json!({ "engine": "mininec", "res_points": 11 }));
+        let pdf = dir.join("d.pdf");
+        assert_eq!(rep["saved"], json!(pdf));
+        assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+        let found = rep["resonances"]["found"].as_array().unwrap();
+        assert!(found.iter().any(|r| (r["freq_mhz"].as_f64().unwrap() - 14.0).abs() < 1.5), "{rep}");
+        let p2 = dir.join("no_res");
+        let rep = tool(&mut s, "report", json!({ "path": p2, "engine": "mininec", "resonances": false }));
+        assert_eq!(rep["saved"], json!(dir.join("no_res.pdf")));
+        assert!(rep.get("resonances").is_none());
         let _ = std::fs::remove_dir_all(&dir);
 
         // add a wire, delete it again

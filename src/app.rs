@@ -152,7 +152,7 @@ pub(crate) fn not_saved(ant: &Antenna, is_ez: bool, is_nec: bool) -> Vec<String>
 
 /// Where the report's save dialog starts: the antenna file's folder and name with
 /// .pdf, or "untitled.pdf" in the last folder used for a new antenna.
-fn report_target(file: Option<&std::path::Path>, last_dir: Option<&std::path::Path>) -> (Option<PathBuf>, String) {
+pub(crate) fn report_target(file: Option<&std::path::Path>, last_dir: Option<&std::path::Path>) -> (Option<PathBuf>, String) {
     match file {
         Some(p) => (
             p.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.to_path_buf()).or_else(|| last_dir.map(|d| d.to_path_buf())),
