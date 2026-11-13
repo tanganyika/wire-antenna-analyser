@@ -11,6 +11,10 @@ use std::sync::{OnceLock, RwLock};
 pub struct Settings {
     /// Folder last used to open or save an antenna.
     pub last_dir: Option<PathBuf>,
+    /// Antenna file last opened or saved.
+    pub last_file: Option<PathBuf>,
+    /// Open `last_file` at start-up instead of a blank antenna.
+    pub open_last: bool,
     /// Engine chosen at start-up (None = wiremom). `WIREANT_ENGINE` overrides it.
     pub default_engine: Option<Engine>,
     /// An external NEC program (NEC-4, NEC-5 or another NEC-2 build) the user has a copy of.
@@ -28,7 +32,7 @@ pub const DEFAULT_NEC_ARGS: &str = "{in} {out}";
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { last_dir: None, default_engine: None, nec_path: String::new(), nec_args: DEFAULT_NEC_ARGS.into(), nec_stdin: false, nec_jobs: 0 }
+        Settings { last_dir: None, last_file: None, open_last: false, default_engine: None, nec_path: String::new(), nec_args: DEFAULT_NEC_ARGS.into(), nec_stdin: false, nec_jobs: 0 }
     }
 }
 
@@ -58,6 +62,8 @@ impl Settings {
             let Some((k, v)) = line.split_once('=') else { continue };
             match k.trim() {
                 "last_dir" => s.last_dir = Some(PathBuf::from(v)).filter(|p| !p.as_os_str().is_empty()),
+                "last_file" => s.last_file = Some(PathBuf::from(v)).filter(|p| !p.as_os_str().is_empty()),
+                "startup" => s.open_last = v.trim() == "last",
                 "default_engine" => s.default_engine = engine_from_key(v),
                 "nec_path" => s.nec_path = v.trim().to_string(),
                 "nec_args" => s.nec_args = v.trim().to_string(),
@@ -74,6 +80,10 @@ impl Settings {
         if let Some(d) = &self.last_dir {
             t += &format!("last_dir={}\n", d.display());
         }
+        if let Some(f) = &self.last_file {
+            t += &format!("last_file={}\n", f.display());
+        }
+        t += &format!("startup={}\n", if self.open_last { "last" } else { "blank" });
         if let Some(e) = self.default_engine {
             t += &format!("default_engine={}\n", engine_key(e));
         }
@@ -135,6 +145,8 @@ mod tests {
     fn round_trip() {
         let s = Settings {
             last_dir: Some(PathBuf::from("/home/x/Antennas")),
+            last_file: Some(PathBuf::from("/home/x/Antennas/yagi 3el.maa")),
+            open_last: true,
             default_engine: Some(Engine::External),
             nec_path: "/opt/nec5/nec5 x".into(),
             nec_args: "-i {in} -o {out}".into(),
@@ -146,5 +158,6 @@ mod tests {
         let old = Settings::parse("last_dir=/tmp\n");
         assert_eq!(old.last_dir, Some(PathBuf::from("/tmp")));
         assert_eq!(old.nec_args, DEFAULT_NEC_ARGS);
+        assert!(!old.open_last);
     }
 }

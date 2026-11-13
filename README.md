@@ -109,7 +109,8 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
     Once saved, the report opens in the default PDF viewer.
 - **Help** (Help menu, or F1 for the tab you are on): help pages built into the program.
   They are also in [docs/help](docs/help/README.md).
-- **Preferences** (File → Preferences): the engine used at start-up and the external
+- **Preferences** (File → Preferences): whether to start with a blank antenna or the
+  last one opened, the engine used at start-up and the external
   NEC program. The last folder used for open/save is remembered too.
 - **MCP server:** `wireant --mcp` lets AI assistants build, load, calculate,
   sweep and optimise antennas; see [Use from an AI assistant (MCP)](#use-from-an-ai-assistant-mcp).

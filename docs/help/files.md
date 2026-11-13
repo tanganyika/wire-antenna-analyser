@@ -24,6 +24,8 @@ vertical, a ground plane and a quad.
 
 **File → Preferences** sets:
 
+- What to **start with**: a blank antenna, or the antenna you last opened or saved.
+  A file named on the command line is opened instead either way.
 - The **engine** used when the program starts.
 - The **External NEC program**. See [Engines](engines.md).
 

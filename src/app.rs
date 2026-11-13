@@ -197,7 +197,7 @@ fn pool(n: usize) -> rayon::ThreadPool {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>, tab: Option<Tab>, shot: Option<PathBuf>) -> App {
+    pub fn new(cc: &eframe::CreationContext<'_>, mut open: Option<PathBuf>, tab: Option<Tab>, shot: Option<PathBuf>) -> App {
         cc.egui_ctx.set_visuals(egui::Visuals::light());
         let max_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         let mut app = App {
@@ -266,6 +266,17 @@ impl App {
         // test hook: WIREANT_HELP=<page> starts with that help page open (docs/help/<page>.md)
         if let Ok(id) = std::env::var("WIREANT_HELP") {
             app.help.show(&id);
+        }
+        // File → Preferences → Start-up: reopen the last antenna (not for screenshots, which must be repeatable)
+        if open.is_none() && app.shot.is_none() {
+            let s = crate::settings::get();
+            if s.open_last {
+                match s.last_file {
+                    Some(f) if f.is_file() => open = Some(f),
+                    Some(f) => app.status = format!("Last antenna {} wasn't found; started with a blank one.", f.display()),
+                    None => {}
+                }
+            }
         }
         if let Some(p) = open {
             app.open_path(p);
@@ -375,7 +386,7 @@ impl App {
                     Ok(a) => {
                         self.set_antenna(a);
                         self.status = format!("Opened {}", p.display());
-                        self.remember_dir(&p);
+                        self.remember_file(&p);
                         self.path = Some(p);
                     }
                     Err(e) => self.error = Some(format!("Couldn't read {}: {}", p.display(), e)),
@@ -383,6 +394,15 @@ impl App {
             }
             Err(e) => self.error = Some(format!("Couldn't open {}: {}", p.display(), e)),
         }
+    }
+
+    /// Remembers the file for File → Preferences → Start-up, and its folder for the file dialogs.
+    fn remember_file(&mut self, file: &std::path::Path) {
+        let abs = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+        if crate::settings::get().last_file.as_deref() != Some(abs.as_path()) {
+            crate::settings::set(|s| s.last_file = Some(abs));
+        }
+        self.remember_dir(file);
     }
 
     fn remember_dir(&mut self, file: &std::path::Path) {
@@ -431,7 +451,7 @@ impl App {
                     ));
                     self.status += " (some parts left out)";
                 }
-                self.remember_dir(&p);
+                self.remember_file(&p);
                 self.path = Some(p);
             }
             Err(e) => self.error = Some(format!("Couldn't save {}: {}", p.display(), e)),
@@ -784,6 +804,11 @@ impl App {
             ui.set_max_width(560.0);
             ui.heading("Start-up");
             ui.horizontal(|ui| {
+                ui.label("Start with:");
+                ui.radio_value(&mut p.s.open_last, false, "a blank antenna");
+                ui.radio_value(&mut p.s.open_last, true, "the last antenna opened");
+            });
+            ui.horizontal(|ui| {
                 ui.label("Engine:");
                 let mut e = p.s.default_engine.unwrap_or(Engine::Wiremom);
                 engine_pick(ui, "pref_engine", &mut e);
@@ -858,9 +883,10 @@ impl App {
         if save || test {
             let s = p.s.clone();
             crate::settings::set(|cur| {
-                let last_dir = cur.last_dir.clone();
+                let (last_dir, last_file) = (cur.last_dir.clone(), cur.last_file.clone());
                 *cur = s;
                 cur.last_dir = last_dir;
+                cur.last_file = last_file;
             });
         }
         if test {
