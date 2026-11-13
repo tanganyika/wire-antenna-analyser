@@ -31,8 +31,17 @@ the wire coordinates. This is a quick way to try different heights.
 - Over real ground, a wire that just stops at the surface is a poor model: a single point contact
   into soil can't be calculated well. The program warns about it. Add a ground rod or radials.
 - With the **wiremom** engine, wires can run below Z = 0 over real ground. Ground rods, buried
-  radials and counterpoises are modelled in full, including the loss in the soil. Wires lying on
-  the ground at Z = 0 are modelled 1 cm into the soil.
+  radials and counterpoises are modelled in full, including the loss in the soil.
+- Wires lying on the ground at Z = 0 (radials laid on the soil) are modelled 1 cm into the soil.
+  This is close to the real thing for bare or insulated wire lying on the soil. A wire's field
+  reaches only a few wire diameters, so one touching the soil carries much the same wave as a
+  buried one. Checks with an exact model of a wire resting on the surface found radiated shares
+  within a few points of this model. A wire held even 1 cm above the soil behaves quite
+  differently, so expect a big change between Z = 0 and Z = 0.01. Wires rising from Z = 0, such
+  as a vertical, keep their feed point at the surface; a short stub in the soil joins them to the
+  radials.
+- Keep other wires at least three wire radii away from the surface, above or below. Closer than
+  that, no thin-wire engine (NEC included) is reliable, and the program warns about it.
 - NEC-2 and MININEC can't model wires in the ground.
 
 ## Second ground

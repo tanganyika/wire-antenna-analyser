@@ -1059,6 +1059,10 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     let resolved = resolve_current_sources(ant, ant.freq_mhz, ant.freq_mhz)?;
     let ant = resolved.as_ref().unwrap_or(ant);
     let mut r = calculate_with(ant)?;
+    let near = crate::wm::near_surface(ant);
+    if !near.is_empty() {
+        r.warnings.push(crate::wm::near_surface_note(&near, ant));
+    }
     // gain is relative to the input power: when hardly any gets in (an open feed), it
     // and the pattern's average are noise
     let rad = r.power.radiated;
