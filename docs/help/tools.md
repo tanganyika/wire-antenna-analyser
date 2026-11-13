@@ -70,7 +70,7 @@ L networks and lines need the wiremom or NEC-2 engine. The parts are ideal (no l
 - The antenna's settings.
 - A picture of it as on the View tab, with wire numbers and current colours.
 - Its loads, lines, plates and comment.
-- The latest calculation and the results history.
+- The latest calculation, its power budget and the results history.
 - The horizontal and vertical patterns.
 - The resonance finder's and match calculator's current results.
 

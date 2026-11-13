@@ -383,6 +383,8 @@ pub struct Solution {
     pub currents: Vec<C>,
     pub z_in: Vec<C>,
     pub p_in: f64,
+    /// power lost in the wires' resistance and in the loads (W)
+    pub losses: [f64; 2],
     pub n_unknowns: usize,
     pub n_segs: usize,
     pub t_fill_ms: f64,
@@ -440,6 +442,7 @@ pub fn solve(ant: &Antenna, mesh: &Mesh, freq_mhz: f64) -> Result<Solution, Stri
         }
     });
     // conductor loss
+    let mut r_wire = vec![0.0; n];
     if let Some((sig, mu_r)) = ant.material.conduction(ant.user_rho, ant.user_mu) {
         let rs = (PI * f * MU0 * mu_r / sig).sqrt();
         for m in 0..n {
@@ -448,6 +451,7 @@ pub fn solve(ant: &Antenna, mesh: &Mesh, freq_mhz: f64) -> Result<Solution, Stri
                 r += rs / (2.0 * PI * pm.r) * pm.half_len;
             }
             z[m * n + m] += r;
+            r_wire[m] = r;
         }
     }
     // wire insulation: distributed series inductance jωL' along insulated wires
@@ -476,6 +480,7 @@ pub fn solve(ant: &Antenna, mesh: &Mesh, freq_mhz: f64) -> Result<Solution, Stri
     if ant.sources.is_empty() {
         return Err("There is no source.".into());
     }
+    let mut load_gaps = Vec::new();
     for l in &ant.loads {
         let g = find_gap(mesh, l.wire, l.pos)
             .ok_or_else(|| format!("Load on wire {} has no place to sit.", l.wire + 1))?;
@@ -485,6 +490,7 @@ pub fn solve(ant: &Antenna, mesh: &Mesh, freq_mhz: f64) -> Result<Solution, Stri
                 z[a * n + b] += zl * (sa * sb);
             }
         }
+        load_gaps.push((g.crossing.clone(), zl));
     }
     let t_fill = t0.elapsed().as_secs_f64() * 1e3;
     let t1 = Instant::now();
@@ -497,11 +503,21 @@ pub fn solve(ant: &Antenna, mesh: &Mesh, freq_mhz: f64) -> Result<Solution, Stri
         z_in.push(if i.norm() > 0.0 { *v / i } else { C::new(f64::INFINITY, 0.0) });
         p_in += 0.5 * (v * i.conj()).re;
     }
+    // ½ R |I|² in the wires' resistance and the loads
+    let wire_loss = r_wire.iter().zip(&rhs).map(|(r, i)| 0.5 * r * i.norm_sqr()).sum();
+    let load_loss = load_gaps
+        .iter()
+        .map(|(cross, zl)| {
+            let i: C = cross.iter().map(|&(b, s)| rhs[b] * s).sum();
+            0.5 * i.norm_sqr() * zl.re
+        })
+        .sum();
     Ok(Solution {
         freq_mhz,
         currents: rhs,
         z_in,
         p_in,
+        losses: [wire_loss, load_loss],
         n_unknowns: n,
         n_segs: ns,
         t_fill_ms: t_fill,
@@ -746,6 +762,9 @@ pub struct CalcResult {
     pub swr: f64,
     pub ga_dbi: f64,
     pub fb_db: f64,
+    /// Radiated / input power (0..1); NaN where only a quick result was wanted
+    /// (sweeps, the optimizer).
+    pub eff: f64,
     pub az_max: f64,
     pub el_max: f64,
     pub horizontal_pol: bool,
@@ -785,6 +804,72 @@ pub struct FullResult {
     pub warnings: Vec<String>,
     /// Per-segment current magnitude (start, end, |I|) when an external engine solved it.
     pub seg_currents: Option<Vec<(V3, V3, f64)>>,
+    /// Where the input power goes.
+    pub power: PowerBudget,
+}
+
+/// Where the input power goes, as fractions of it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PowerBudget {
+    /// Radiated into space: the 3D pattern's gain averaged over all directions.
+    pub radiated: f64,
+    /// Lost in the antenna: (what, fraction), as the engine reports them.
+    pub losses: Vec<(&'static str, f64)>,
+    /// Lost in a real ground: what the radiated power and the losses leave.
+    pub ground: Option<f64>,
+    /// The currents were found over perfect ground, so `ground` holds only the loss in
+    /// the ground's reflection, not near the antenna.
+    pub reflection_only: bool,
+}
+
+impl PowerBudget {
+    /// From the 3D pattern and the engine's losses (W) out of `p_in` (W).
+    pub fn new(ant: &Antenna, pat: &Patterns, p_in: f64, losses_w: &[(&'static str, f64)], reflection_only: bool) -> PowerBudget {
+        let radiated = radiated_fraction(pat);
+        let losses: Vec<(&'static str, f64)> = losses_w.iter().map(|&(k, w)| (k, if p_in > 0.0 { (w / p_in).max(0.0) } else { 0.0 })).collect();
+        let ground = (ant.ground.kind == GroundKind::Real).then(|| (1.0 - radiated - losses.iter().map(|l| l.1).sum::<f64>()).max(0.0));
+        PowerBudget { radiated, losses, ground, reflection_only: reflection_only && ground.is_some() }
+    }
+}
+
+/// Fraction of the input power that is radiated: the gain (which is relative to the
+/// input power) averaged over the sphere, ∫G dΩ / 4π, from the 3D pattern grid
+/// (trapezoid rule in elevation). Over ground the grid covers the upper half only.
+/// Shown with the power budget when [`PowerBudget::reflection_only`] is set.
+pub const REFLECTION_ONLY_NOTE: &str = "The currents were found over perfect ground, so the ground loss here is only what the ground's reflection takes; loss in the ground near the antenna is not included.";
+
+impl PowerBudget {
+    /// "Radiated 62.3 %   wires 1.1 %   ground 36.6 %"
+    pub fn line(&self) -> String {
+        let mut t = format!("Radiated {}", pct(self.radiated));
+        for (k, v) in &self.losses {
+            t += &format!("   {} {}", k.to_lowercase(), pct(*v));
+        }
+        if let Some(g) = self.ground {
+            t += &format!("   ground{} {}", if self.reflection_only { " (reflection)" } else { "" }, pct(g));
+        }
+        t
+    }
+}
+
+/// A fraction as a percentage, "—" when unknown.
+pub fn pct(x: f64) -> String {
+    if x.is_finite() { format!("{:.1} %", x * 100.0) } else { "—".into() }
+}
+
+pub fn radiated_fraction(p: &Patterns) -> f64 {
+    let n = p.grid_els.len();
+    let mut s = 0.0;
+    for (i, (row, el)) in p.grid.iter().zip(&p.grid_els).enumerate() {
+        if row.is_empty() {
+            continue;
+        }
+        let avg = row.iter().sum::<f64>() / row.len() as f64;
+        let w = if i == 0 || i + 1 == n { 0.5 } else { 1.0 };
+        s += w * avg * el.to_radians().cos();
+    }
+    // Σ avg·cos(el)·Δel · 2π / 4π
+    s * p.grid_step.to_radians() / 2.0
 }
 
 pub fn swr(z: C, z0: f64) -> f64 {
@@ -827,7 +912,7 @@ pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) ->
     match ant.engine {
         Engine::Nec2 | Engine::External => {
             let r = crate::nec::quick(ant, freq_mhz, seg_freq_mhz, need_far)?;
-            let sol = Solution { freq_mhz, currents: vec![], z_in: vec![r.z], p_in: 0.0, n_unknowns: r.n_unknowns, n_segs: r.n_segs, t_fill_ms: 0.0, t_solve_ms: r.t_solve_ms };
+            let sol = Solution { freq_mhz, currents: vec![], z_in: vec![r.z], p_in: 0.0, losses: [0.0; 2], n_unknowns: r.n_unknowns, n_segs: r.n_segs, t_fill_ms: 0.0, t_solve_ms: r.t_solve_ms };
             return Ok((r, empty_mesh(), sol, None));
         }
         Engine::Wiremom => {
@@ -870,6 +955,7 @@ pub fn summarize(ant: &Antenna, freq_mhz: f64, t0: Instant, sol: &Solution, rad:
         freq_mhz,
         z,
         swr: swr(z, ant.z0),
+        eff: f64::NAN,
         ga_dbi: ga,
         fb_db: fb,
         az_max: az,
@@ -897,7 +983,14 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     let (mut res, mesh, sol, rad) = quick(ant, ant.freq_mhz, ant.freq_mhz, true)?;
     let patterns = patterns(ant, &mut res, &rad.unwrap());
     let warnings = mesh.warnings.clone();
-    Ok(FullResult { result: res, patterns, currents: sol.currents, mesh, warnings, seg_currents: None })
+    let mut losses = vec![("Wires", sol.losses[0])];
+    if !ant.loads.is_empty() {
+        losses.push(("Loads", sol.losses[1]));
+    }
+    // MININEC finds the currents over perfect ground
+    let power = PowerBudget::new(ant, &patterns, sol.p_in, &losses, true);
+    res.eff = power.radiated;
+    Ok(FullResult { result: res, patterns, currents: sol.currents, mesh, warnings, seg_currents: None, power })
 }
 
 /// Pattern cuts through the maximum and the 3D grid; adds the time taken to `res`.
@@ -1073,5 +1166,68 @@ mod fb_range {
             let (r, ..) = quick(&a, a.freq_mhz, a.freq_mhz, true).unwrap();
             println!("rear range {az}/{el}: F/B {:.2} dB", r.fb_db);
         }
+    }
+}
+#[cfg(test)]
+mod power_tests {
+    use super::*;
+
+    fn budget(i: usize, e: Engine, f: impl Fn(&mut Antenna)) -> PowerBudget {
+        let mut a = Antenna::example(i);
+        a.engine = e;
+        f(&mut a);
+        calculate(&a).unwrap().power
+    }
+
+    fn total(p: &PowerBudget) -> f64 {
+        p.radiated + p.losses.iter().map(|l| l.1).sum::<f64>() + p.ground.unwrap_or(0.0)
+    }
+
+    #[test]
+    fn free_space_budget_adds_up() {
+        // a copper dipole: about 1.1 % lost in the wire (NEC-2 and NEC-5 agree)
+        let mut engines = vec![Engine::Wiremom, Engine::Mininec];
+        if crate::nec::available() {
+            engines.push(Engine::Nec2);
+        }
+        for e in engines {
+            let p = budget(0, e, |_| {});
+            assert!(p.ground.is_none() && !p.reflection_only);
+            assert!((total(&p) - 1.0).abs() < 0.003, "{e:?} {}", p.line());
+            assert!((p.losses[0].1 - 0.011).abs() < 0.002, "{e:?} {}", p.line());
+            let p = budget(0, e, |a| a.material = Material::Lossless);
+            assert!((p.radiated - 1.0).abs() < 0.003, "{e:?} {}", p.line());
+        }
+    }
+
+    #[test]
+    fn loads_show_in_the_budget() {
+        let p = budget(0, Engine::Wiremom, |a| {
+            a.loads.push(Load { wire: 0, pos: 0.25, kind: LoadKind::Rx { r: 20.0, x: 0.0 } });
+        });
+        let loads = p.losses.iter().find(|l| l.0 == "Loads").unwrap().1;
+        assert!(loads > 0.05, "{}", p.line());
+        assert!((total(&p) - 1.0).abs() < 0.003, "{}", p.line());
+    }
+
+    #[test]
+    fn real_ground_loss_agrees_between_engines() {
+        // the 3-element Yagi over average ground: about a fifth goes into the ground
+        let w = budget(2, Engine::Wiremom, |_| {});
+        let g = w.ground.unwrap();
+        assert!(!w.reflection_only && g > 0.15 && g < 0.25, "{}", w.line());
+        let m = budget(2, Engine::Mininec, |_| {});
+        assert!(m.reflection_only, "MININEC finds the currents over perfect ground");
+        if crate::nec::available() {
+            let n = budget(2, Engine::Nec2, |_| {});
+            assert!((n.ground.unwrap() - g).abs() < 0.02, "wiremom {} / NEC-2 {}", w.line(), n.line());
+        }
+    }
+
+    #[test]
+    fn grounded_vertical_over_real_ground_is_reflection_only() {
+        // wiremom finds the currents over perfect ground when wires end on real ground
+        let p = budget(3, Engine::Wiremom, |a| a.ground.kind = GroundKind::Real);
+        assert!(p.reflection_only && p.ground.is_some(), "{}", p.line());
     }
 }

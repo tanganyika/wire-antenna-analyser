@@ -221,6 +221,7 @@ pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) ->
         currents: vec![],
         z_in: ws.source_impedances(),
         p_in: ws.input_power(),
+        losses: [ws.losses.wire, ws.losses.loads],
         n_unknowns: ws.mesh.n_unknowns(),
         n_segs: ws.mesh.n_segments(),
         t_fill_ms: ws.t_fill_ms,
@@ -255,7 +256,17 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     }
     let mesh = view_mesh(ant, &ws, &app_wire);
     let seg_currents = ws.segment_currents().into_iter().map(|(a, b, i)| (a, b, i.norm())).collect();
-    Ok(FullResult { result: res, patterns, mesh, currents: vec![], warnings, seg_currents: Some(seg_currents) })
+    let l = ws.losses;
+    let mut losses = vec![("Wires", l.wire)];
+    if !ant.loads.is_empty() {
+        losses.push(("Loads", l.loads));
+    }
+    if !ant.lines.is_empty() {
+        losses.push(("Lines", l.networks));
+    }
+    let power = mom::PowerBudget::new(ant, &patterns, ws.input_power(), &losses, uses_ground_stand_in(ant));
+    res.eff = power.radiated;
+    Ok(FullResult { result: res, patterns, mesh, currents: vec![], warnings, seg_currents: Some(seg_currents), power })
 }
 
 /// The segment layout for the 3D view, from wiremom's mesh, one entry per app wire.

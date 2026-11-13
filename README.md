@@ -51,6 +51,9 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
   - Optimizer: changes wire lengths, positions or ends towards low SWR, jX near 0,
     high gain or high F/B. Wire ends joined to other wires or to the ground stay
     joined; click **Use optimized antenna** to keep the result.
+- **Efficiency and power budget:** each calculation shows how much of the input
+  power is radiated and how much is lost in the wires, loads, lines and the ground
+  (Calculate tab, report and MCP), on every engine.
 - **Modelling:** wire materials, lumped loads (R+jX, L/C/Q traps, series/parallel
   RLC), wire insulation (velocity factor), free / perfect / real ground, F/B rear
   range.
@@ -100,8 +103,8 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
       itself), or the coax sections as lines.
   - **Antenna report (PDF):** an A4 report of the antenna (settings, a picture
     as on the View tab with its viewing direction, wire numbers and current
-    colours, loads, lines, plates, comment), the Calculate tab's latest result,
-    notes and results history, the horizontal and vertical patterns, and the
+    colours, loads, lines, plates, comment), the Calculate tab's latest result
+    with its efficiency and power budget, notes and results history, the horizontal and vertical patterns, and the
     resonance finder's and match calculator's current results with their plots.
     The save dialog suggests the antenna file's name with `.pdf` in its folder,
     or `untitled.pdf` in the last folder used. The PDF is written directly, with
@@ -143,7 +146,7 @@ Other clients take the same command in their configuration, e.g. Claude Desktop'
 | `get_antenna`, `set_antenna` | the whole antenna as JSON |
 | `update_antenna` | change it with a JSON Merge Patch, e.g. `{"freq_mhz": 7.1, "ground": {"kind": "real"}}` |
 | `set_wire`, `delete_wire` | change, add or remove one wire (sources and loads on a deleted wire go too) |
-| `calculate` | impedance, SWR, gain and direction, F/B; optional azimuth and elevation pattern cuts |
+| `calculate` | impedance, SWR, gain and direction, F/B, efficiency and power budget (radiated, wires, loads, lines, ground); optional azimuth and elevation pattern cuts |
 | `sweep` | R, X, SWR (and gain, F/B) over a frequency range |
 | `optimize` | the optimizer: wire lengths, positions or ends against SWR, X, gain and F/B weights |
 | `report` | the PDF antenna report, as Tools → Antenna report: calculates, finds resonances and suggests matches itself; saved next to the antenna's file unless given a `path` |

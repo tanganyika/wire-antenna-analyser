@@ -587,12 +587,30 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
                 ("SWR".into(), format!("{:.2} ({} Ω)", r.swr, ant.z0)),
                 ("Gain".into(), format!("{:.2} dBi ({:.2} dBd)", r.ga_dbi, r.ga_dbi - 2.15)),
                 ("Front/back".into(), format!("{:.2} dB", r.fb_db)),
+                ("Efficiency".into(), crate::mom::pct(r.eff)),
                 ("Maximum".into(), format!("azimuth {:.1}°, elevation {:.1}°", r.az_max, r.el_max)),
                 ("Polarisation".into(), if r.horizontal_pol { "horizontal".into() } else { "vertical".into() }),
                 ("Ground".into(), r.ground.label().into()),
                 ("Problem size".into(), format!("{} unknowns, {} segments", r.n_unknowns, r.n_segs)),
                 ("Time".into(), format!("{:.0} ms on {} threads", r.t_total_ms, r.threads)),
             ]);
+            d.sub("Power budget");
+            let p = &c.power;
+            let mut rows = vec![vec!["Radiated".to_string(), crate::mom::pct(p.radiated)]];
+            rows.extend(p.losses.iter().map(|(k, v)| vec![format!("Lost in {}", k.to_lowercase()), crate::mom::pct(*v)]));
+            if let Some(g) = p.ground {
+                rows.push(vec![if p.reflection_only { "Lost in the ground's reflection".into() } else { "Lost in the ground".into() }, crate::mom::pct(g)]);
+            }
+            d.table(&["Input power", "Share"], &rows, 9.0);
+            let mut how = "Radiated is the 3D pattern's gain averaged over all directions.".to_string();
+            if p.ground.is_some() {
+                how += " The ground's share is what the radiated power and the other losses leave, including the ground wave.";
+            }
+            if p.reflection_only {
+                how += " ";
+                how += crate::mom::REFLECTION_ONLY_NOTE;
+            }
+            d.para(&how, 8.0, GREY);
             if !c.warnings.is_empty() {
                 d.sub("Notes");
                 for w in &c.warnings {
@@ -617,13 +635,14 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
                     f(r.ga_dbi, 2),
                     f(r.fb_db, 2),
                     f(r.el_max, 1),
+                    if r.eff.is_finite() { f(r.eff * 100.0, 1) } else { "—".into() },
                     r.ground.label().replace(" ground", "").into(),
                     if r.ground == GroundKind::Free { "—".into() } else { f(r.add_height, 2) },
                     if r.horizontal_pol { "hori.".into() } else { "vert.".into() },
                 ]
             })
             .collect();
-        d.table(&["No.", "F (MHz)", "R (Ω)", "jX (Ω)", "SWR", "Gh dBd", "Ga dBi", "F/B dB", "Elev.", "Ground", "Add H.", "Polar."], &rows, 8.5);
+        d.table(&["No.", "F (MHz)", "R (Ω)", "jX (Ω)", "SWR", "Gh dBd", "Ga dBi", "F/B dB", "Elev.", "Eff. %", "Ground", "Add H.", "Polar."], &rows, 8.5);
     }
     if let Some(c) = calc {
         let p = &c.patterns;

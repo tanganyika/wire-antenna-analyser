@@ -185,6 +185,7 @@ impl Server {
                 let ant = self.with_options(a)?;
                 let mut full = mom::calculate(&ant).map_err(CallError::Failed)?;
                 let mut v = result_json(&full.result);
+                v["power_budget"] = power_json(&full.power);
                 v["warnings"] = json!(full.warnings);
                 if a.get("patterns").and_then(Value::as_bool).unwrap_or(false) {
                     let step = a.get("pattern_step_deg").and_then(Value::as_f64).unwrap_or(5.0).clamp(1.0, 90.0) as usize;
@@ -345,6 +346,7 @@ impl Server {
                 std::fs::write(&p, bytes).map_err(|e| CallError::Failed(format!("Couldn't save {}: {e}", p.display())))?;
 
                 let mut v = json!({ "saved": p, "calculation": result_json(&calc.result) });
+                v["calculation"]["power_budget"] = power_json(&calc.power);
                 v["calculation"]["warnings"] = json!(calc.warnings);
                 if let Some(rep) = &st.report {
                     let bw = |b: Option<(f64, f64)>| b.map(|(lo, hi)| json!({ "from_mhz": lo, "to_mhz": hi, "width_khz": (hi - lo) * 1000.0 }));
@@ -550,6 +552,20 @@ fn merge_patch(target: &mut Value, patch: &Value) {
     }
 }
 
+/// Where the input power goes, in percent of it.
+fn power_json(p: &mom::PowerBudget) -> Value {
+    let r1 = |x: f64| (x * 1000.0).round() / 10.0;
+    let mut v = json!({
+        "radiated_pct": r1(p.radiated),
+        "losses_pct": p.losses.iter().map(|(k, x)| (k.to_lowercase(), json!(r1(*x)))).collect::<serde_json::Map<_, _>>(),
+    });
+    if let Some(g) = p.ground {
+        v["ground_pct"] = json!(r1(g));
+        v["ground_note"] = json!(if p.reflection_only { mom::REFLECTION_ONLY_NOTE } else { "what the radiated power and the other losses leave, including the ground wave" });
+    }
+    v
+}
+
 fn result_json(r: &CalcResult) -> Value {
     json!({
         "freq_mhz": r.freq_mhz,
@@ -558,6 +574,7 @@ fn result_json(r: &CalcResult) -> Value {
         "swr": fin(r.swr),
         "gain_dbi": r.ga_dbi,
         "fb_db": r.fb_db,
+        "efficiency_pct": r.eff.is_finite().then(|| (r.eff * 1000.0).round() / 10.0),
         "max_azimuth_deg": r.az_max,
         "max_elevation_deg": r.el_max,
         "polarization": if r.horizontal_pol { "horizontal" } else { "vertical" },
@@ -690,7 +707,7 @@ fn tools() -> Value {
         },
         {
             "name": "calculate",
-            "description": "Calculates the current antenna: feed impedance, SWR against z0, maximum gain and its direction, front-to-back ratio. Optionally returns azimuth and elevation pattern cuts through the maximum.",
+            "description": "Calculates the current antenna: feed impedance, SWR against z0, maximum gain and its direction, front-to-back ratio, efficiency and where the input power goes (radiated, lost in wires, loads, lines and the ground). Optionally returns azimuth and elevation pattern cuts through the maximum.",
             "inputSchema": { "type": "object", "properties": {
                 "engine": engine_prop(),
                 "freq_mhz": freq_prop(),
@@ -777,6 +794,12 @@ mod tests {
         let rr = r["r_ohm"].as_f64().unwrap();
         assert!(rr > 60.0 && rr < 85.0, "{r}");
         assert_eq!(r["patterns"]["azimuth_cut"]["points"].as_array().unwrap().len(), 37);
+        // lossless dipole in free space: all of the input power is radiated
+        let eff = r["efficiency_pct"].as_f64().unwrap();
+        assert!((eff - 100.0).abs() < 0.3, "{r}");
+        assert_eq!(r["power_budget"]["radiated_pct"].as_f64(), Some(eff));
+        assert_eq!(r["power_budget"]["losses_pct"]["wires"].as_f64(), Some(0.0));
+        assert!(r["power_budget"].get("ground_pct").is_none());
 
         // round trip through JSON and a file
         let a = tool(&mut s, "get_antenna", json!({}))["antenna"].clone();

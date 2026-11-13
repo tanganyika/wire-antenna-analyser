@@ -1325,6 +1325,7 @@ impl App {
                 row(ui, &format!("SWR ({:.0} Ω)", self.ant.z0), format!("{:.2}", r.swr));
                 row(ui, "Gain", format!("{:.2} dBi  ({:.2} dBd)", r.ga_dbi, r.ga_dbi - 2.15));
                 row(ui, "F/B", format!("{:.2} dB", r.fb_db));
+                row(ui, "Efficiency", crate::mom::pct(r.eff));
                 row(ui, "Max at", format!("az {:.1}°  el {:.1}°", r.az_max, r.el_max));
                 row(ui, "Polarization", (if r.horizontal_pol { "Horizontal" } else { "Vertical" }).to_string());
                 row(ui, "Segments", format!("{} ({} unknowns)", r.n_segs, r.n_unknowns));
@@ -1346,7 +1347,7 @@ impl App {
         egui::ScrollArea::both().id_salt("hist").max_height(170.0).auto_shrink([false, true]).stick_to_bottom(true).show(ui, |ui| {
             egui::Grid::new("history").striped(true).spacing([14.0, 3.0]).show(ui, |ui| {
                 // column order and names as in the original's results grid (english.mmn Grid1)
-                for h in ["No.", "F (MHz)", "R (Ohm)", "jX (Ohm)", "SWR", "Gh dBd", "Ga dBi", "F/B dB", "Elev.", "Ground", "Add H.", "Polar.", "ms", "Threads"] {
+                for h in ["No.", "F (MHz)", "R (Ohm)", "jX (Ohm)", "SWR", "Gh dBd", "Ga dBi", "F/B dB", "Elev.", "Eff. %", "Ground", "Add H.", "Polar.", "ms", "Threads"] {
                     ui.label(RichText::new(h).strong());
                 }
                 ui.end_row();
@@ -1361,6 +1362,7 @@ impl App {
                     ui.label(format!("{:.2}", r.ga_dbi));
                     ui.label(format!("{:.2}", r.fb_db));
                     ui.label(format!("{:.1}", r.el_max));
+                    ui.label(if r.eff.is_finite() { format!("{:.1}", r.eff * 100.0) } else { "—".into() });
                     ui.label(match r.ground {
                         GroundKind::Free => "Free",
                         GroundKind::Perfect => "Perfect",
@@ -1377,6 +1379,20 @@ impl App {
                 ui.label(RichText::new("Press Calculate to analyse the antenna.").italics().color(Color32::GRAY));
             }
         });
+        if let Some(c) = &self.calc {
+            let p = &c.power;
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Power:").strong());
+                let mut hover = "Where the input power goes. Radiated: the 3D pattern's gain averaged over all directions (the efficiency). The losses are the engine's own.".to_string();
+                if p.ground.is_some() {
+                    hover += " Ground: what the radiated power and the losses leave, including the ground wave.";
+                }
+                if p.reflection_only {
+                    hover += &format!("\n\n{}", crate::mom::REFLECTION_ONLY_NOTE);
+                }
+                ui.label(p.line()).on_hover_text(hover);
+            });
+        }
     }
 
     fn patterns(&mut self, ui: &mut egui::Ui, size: f32) {

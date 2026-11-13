@@ -500,6 +500,28 @@ struct Report {
     seg_cur: Vec<f64>,
     /// (theta, phi, vert dB, hor dB, total dB)
     pattern: Vec<[f64; 5]>,
+    /// POWER BUDGET: input power and the losses (W)
+    p_in: f64,
+    losses: Vec<(&'static str, f64)>,
+}
+
+/// The POWER BUDGET lines: NEC-2 has STRUCTURE LOSS (wires and loads) and NETWORK LOSS,
+/// NEC-5 a WIRE LOSS that includes the loads.
+fn power_budget(text: &str) -> (f64, Vec<(&'static str, f64)>) {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(i) = lines.iter().position(|l| l.contains("POWER BUDGET")) else { return (0.0, vec![]) };
+    let (mut p_in, mut losses) = (0.0, vec![]);
+    for l in lines.iter().skip(i + 1).take(10) {
+        let Some((k, v)) = l.split_once('=') else { continue };
+        let Some(&w) = numbers(v).first() else { continue };
+        match k.trim().to_ascii_uppercase().as_str() {
+            "INPUT POWER" => p_in = w,
+            "STRUCTURE LOSS" | "WIRE LOSS" => losses.push(("Wires and loads", w)),
+            "NETWORK LOSS" if w > 0.0 => losses.push(("Lines and networks", w)),
+            _ => {}
+        }
+    }
+    (p_in, losses)
 }
 
 fn parse(text: &str) -> Result<Report, String> {
@@ -527,7 +549,8 @@ fn parse(text: &str) -> Result<Report, String> {
             }
         }
     }
-    Ok(Report { z, seg_cur, pattern })
+    let (p_in, losses) = power_budget(text);
+    Ok(Report { z, seg_cur, pattern, p_in, losses })
 }
 
 fn lin(db: f64) -> f64 {
@@ -583,6 +606,7 @@ fn result(ant: &Antenna, freq_mhz: f64, lay: &Layout, rep: &Report, need_far: bo
         freq_mhz,
         z: rep.z,
         swr: mom::swr(rep.z, ant.z0),
+        eff: f64::NAN,
         ga_dbi: ga,
         fb_db: fb,
         az_max: az,
@@ -709,23 +733,19 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     if second_medium(ant).is_some() && ant.ground.second.fresnel {
         warnings.push("NEC takes the second ground at each ray's reflection point; the Fresnel-zone transition needs the wiremom or MININEC engine.".to_string());
     }
-    Ok(FullResult {
-        result: res.clone(),
-        patterns: Patterns {
-            az_cut,
-            el_cut_deg: res.el_max,
-            el_cut,
-            az_cut_deg: res.az_max,
-            free_space: !grounded,
-            grid,
-            grid_els,
-            grid_step: 3.0,
-        },
-        mesh,
-        currents: vec![],
-        warnings,
-        seg_currents: Some(seg_currents),
-    })
+    let patterns = Patterns {
+        az_cut,
+        el_cut_deg: res.el_max,
+        el_cut,
+        az_cut_deg: res.az_max,
+        free_space: !grounded,
+        grid,
+        grid_els,
+        grid_step: 3.0,
+    };
+    let power = mom::PowerBudget::new(ant, &patterns, rep.p_in, &rep.losses, false);
+    res.eff = power.radiated;
+    Ok(FullResult { result: res.clone(), patterns, mesh, currents: vec![], warnings, seg_currents: Some(seg_currents), power })
 }
 
 #[cfg(test)]
@@ -743,6 +763,14 @@ mod tests {
         assert!((r.seg_cur[10] - 1.38029e-2).abs() < 1e-7);
         assert_eq!(r.pattern.len(), 18);
         assert_eq!(r.pattern[0], [0.0, 0.0, -999.99, 2.09, 2.09]);
+        assert_eq!(r.p_in, 6.8776e-3);
+        assert_eq!(r.losses, vec![("Wires and loads", 7.8885e-5)]);
+    }
+
+    #[test]
+    fn nec2_power_budget() {
+        let t = "   ---------- POWER BUDGET ---------\n   INPUT POWER   =  5.8937E-03 Watts\n   RADIATED POWER=  5.8271E-03 Watts\n   STRUCTURE LOSS=  6.6591E-05 Watts\n   NETWORK LOSS  =  1.0000E-04 Watts\n   EFFICIENCY    =   98.87 Percent\n";
+        assert_eq!(power_budget(t), (5.8937e-3, vec![("Wires and loads", 6.6591e-5), ("Lines and networks", 1e-4)]));
     }
 
     /// NEC-5's input row has a source-type column (2 = current source, EX 4); NEC-2's hasn't.
