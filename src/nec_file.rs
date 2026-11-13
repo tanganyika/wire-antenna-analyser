@@ -7,6 +7,7 @@
 //! Write: the antenna as GW/GE/GN/LD/EX/FR/RP cards, plus wire insulation (CM + LD 2).
 
 use crate::model::*;
+use num_complex::Complex64 as C;
 use std::collections::HashMap;
 
 // ------------------------------------------------------------------ formulas (SY)
@@ -196,7 +197,11 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
     let mut ex: Vec<(i64, i64, f64, f64)> = Vec::new();
     let mut ld: Vec<(i64, i64, i64, i64, f64, f64, f64)> = Vec::new();
     let mut insul: HashMap<usize, (f64, f64)> = HashMap::new();
-    let mut tl: Vec<(i64, i64, i64, i64, f64, f64, bool)> = Vec::new();
+    // TL and NT cards in order: tags and segments, then (Z0, length, shunt a, shunt b) for a
+    // line or (y11, y12, y22) for a network
+    let mut tl: Vec<(i64, i64, i64, i64, Net)> = Vec::new();
+    // exact lumped parts written by this program: index -> (shunt a, shunt b, series)
+    let mut tl_parts: HashMap<usize, (Option<LoadKind>, Option<LoadKind>, Option<LoadKind>)> = HashMap::new();
     // plates: SM (or rectangular SP) gives corners 1 and 2, the next SC corner 3
     let mut plates: Vec<Plate> = Vec::new();
     let mut pending_plate: Option<([f64; 3], [f64; 3], usize, usize)> = None;
@@ -221,6 +226,14 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
                     }
                 } else if let Some(sm) = crate::model::SecondMedium::decode(&c) {
                     second_cm = Some(sm);
+                } else if let Some(x) = c.strip_prefix("wireant parts ") {
+                    if let Some((i, json)) = x.split_once(' ') {
+                        if let (Ok(i), Ok(p)) = (i.parse::<usize>(), serde_json::from_str(json)) {
+                            if i >= 1 {
+                                tl_parts.insert(i - 1, p);
+                            }
+                        }
+                    }
                 } else if let Some(x) = c.strip_prefix("wireant line") {
                     let v: Vec<f64> = x.split_whitespace().filter_map(|s| s.parse().ok()).collect();
                     if v.len() >= 3 && v[0] >= 1.0 {
@@ -394,8 +407,12 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
                 }
             }
             "TL" => {
-                let shunts = (6..10).map(num).collect::<Result<Vec<f64>, String>>()?;
-                tl.push((int(0)?, int(1)?, int(2)?, int(3)?, num(4)?, num(5)?, shunts.iter().any(|y| *y != 0.0)));
+                let y = |i: usize| -> Result<C, String> { Ok(C::new(num(i)?, num(i + 1)?)) };
+                tl.push((int(0)?, int(1)?, int(2)?, int(3)?, Net::Line { z0: num(4)?, len: num(5)?, ya: y(6)?, yb: y(8)? }));
+            }
+            "NT" => {
+                let y = |i: usize| -> Result<C, String> { Ok(C::new(num(i)?, num(i + 1)?)) };
+                tl.push((int(0)?, int(1)?, int(2)?, int(3)?, Net::Matrix { y11: y(4)?, y12: y(6)?, y22: y(8)? }));
             }
             "FR" => {
                 if freq.is_none() {
@@ -541,22 +558,47 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
     }
     ant.plates = plates;
     ant.lines.clear();
-    for (i, &(t1, s1, t2, s2, z0, len, shunts)) in tl.iter().enumerate() {
+    // admittances read from the cards hold at the file's frequency only; as fixed impedances
+    let fixed = |y: C| (y.norm() > 0.0).then(|| {
+        let z = 1.0 / y;
+        LoadKind::Rx { r: z.re, x: z.im }
+    });
+    for (i, &(t1, s1, t2, s2, net)) in tl.iter().enumerate() {
         match (locate(t1, s1), locate(t2, s2)) {
             (Some((wa, pa)), Some((wb, pb))) => {
-                let (vf, loss) = tl_extra.get(&i).copied().unwrap_or((1.0, 0.0));
                 let mut t = TLine::new(wa, pa, wb, pb);
-                t.z0 = z0.abs();
-                t.reversed = z0 < 0.0;
-                // NEC-2 lengths are electrical (at c); with a stored velocity factor the
-                // physical length is shorter
-                t.length = len.max(0.0) * vf;
-                t.vf = vf;
-                t.loss_db = loss;
-                ant.lines.push(t);
-                if shunts {
-                    warn.push(format!("transmission line {}: end shunt admittances skipped", i + 1));
+                match net {
+                    Net::Line { z0, len, ya, yb } => {
+                        let (vf, loss) = tl_extra.get(&i).copied().unwrap_or((1.0, 0.0));
+                        t.z0 = z0.abs();
+                        t.reversed = z0 < 0.0;
+                        // NEC-2 lengths are electrical (at c); with a stored velocity factor the
+                        // physical length is shorter
+                        t.length = len.max(0.0) * vf;
+                        t.vf = vf;
+                        t.loss_db = loss;
+                        t.shunt_a = fixed(ya);
+                        t.shunt_b = fixed(yb);
+                    }
+                    Net::Matrix { y11, y12, y22 } => {
+                        // a series part -y12 with what is left of y11 and y22 across the ends
+                        if y12.norm() == 0.0 {
+                            warn.push(format!("network {} skipped: its ends aren't joined (y12 = 0)", i + 1));
+                            continue;
+                        }
+                        let ys = -y12;
+                        let z = 1.0 / ys;
+                        t.series = Some(LoadKind::Rx { r: z.re, x: z.im });
+                        t.shunt_a = fixed(y11 - ys).filter(|_| (y11 - ys).norm() > 1e-12 * ys.norm());
+                        t.shunt_b = fixed(y22 - ys).filter(|_| (y22 - ys).norm() > 1e-12 * ys.norm());
+                    }
                 }
+                if let Some((a, b, series)) = tl_parts.get(&i).cloned() {
+                    t.shunt_a = a;
+                    t.shunt_b = b;
+                    t.series = series;
+                }
+                ant.lines.push(t);
             }
             _ => warn.push(format!("transmission line {} skipped: tag {t1} segment {s1} or tag {t2} segment {s2} not found", i + 1)),
         }
@@ -565,6 +607,17 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
         warn.push("No voltage source (EX 0) found".into());
     }
     Ok(Imported { ant, warnings: warn })
+}
+
+/// An admittance-sized number: siemens need more than six decimals.
+fn e(x: f64) -> String {
+    if x == 0.0 { "0".into() } else { format!("{:.6E}", x) }
+}
+
+#[derive(Clone, Copy)]
+enum Net {
+    Line { z0: f64, len: f64, ya: C, yb: C },
+    Matrix { y11: C, y12: C, y22: C },
 }
 
 fn n(x: f64) -> String {
@@ -586,6 +639,10 @@ pub fn write(ant: &Antenna) -> String {
     }
     for (i, t) in ant.lines.iter().enumerate().filter(|(_, t)| t.vf != 1.0 || t.loss_db != 0.0) {
         o += &format!("CM wireant line {} {} {}\n", i + 1, t.vf, t.loss_db);
+    }
+    // the TL/NT cards hold the parts' admittances at this frequency only; these keep the parts
+    for (i, t) in ant.lines.iter().enumerate().filter(|(_, t)| t.has_parts()) {
+        o += &format!("CM wireant parts {} {}\n", i + 1, serde_json::to_string(&(&t.shunt_a, &t.shunt_b, &t.series)).unwrap_or_default());
     }
     if ant.ground.second.enabled && ant.ground.kind != GroundKind::Free {
         // the full second-medium description; NEC-2 itself only reads the GD card
@@ -682,11 +739,18 @@ pub fn write(ant: &Antenna) -> String {
         if t.a_wire >= ant.wires.len() || t.b_wire >= ant.wires.len() {
             continue;
         }
+        let (ys, ya, yb) = t.part_admittances(ant.freq_mhz * 1e6);
+        let (a, b) = ((t.a_wire + 1, seg_of(t.a_wire, t.a_pos)), (t.b_wire + 1, seg_of(t.b_wire, t.b_pos)));
+        if let Some(y) = ys {
+            let (y11, y12, y22) = (y + ya, -y, y + yb);
+            o += &format!("NT {} {} {} {} {} {} {} {} {} {}\n", a.0, a.1, b.0, b.1, e(y11.re), e(y11.im), e(y12.re), e(y12.im), e(y22.re), e(y22.im));
+            continue;
+        }
         let z0 = if t.reversed { -t.z0.abs() } else { t.z0.abs() };
         // NEC-2 lines travel at c: write the electrical length (0 = straight distance,
         // only exact when the velocity factor is 1)
         let len = if t.length > 0.0 { t.length / t.vf.max(1e-6) } else { 0.0 };
-        o += &format!("TL {} {} {} {} {} {} 0 0 0 0\n", t.a_wire + 1, seg_of(t.a_wire, t.a_pos), t.b_wire + 1, seg_of(t.b_wire, t.b_pos), n(z0), n(len));
+        o += &format!("TL {} {} {} {} {} {} {} {} {} {}\n", a.0, a.1, b.0, b.1, n(z0), n(len), e(ya.re), e(ya.im), e(yb.re), e(yb.im));
     }
     o += &format!("FR 0 1 0 0 {} 0\n", n(ant.freq_mhz));
     // RP mode 2 = linear cliff (along +X in NEC-2), 3 = circular

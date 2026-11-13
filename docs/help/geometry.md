@@ -50,6 +50,9 @@ wiremom and NEC-2 engines only. For each line you set:
 - **Vel. factor**: about 0.66 for solid-PE coax and 0.8 for foam.
 - **Loss**: in dB per 100 m at the calculation frequency. NEC-2 ignores loss.
 - **Reversed**: the conductors are swapped at the far end, a half twist.
+- **Parts**: coils and capacitors that the match calculator added. A part can sit across either
+  end, or join the two ends in place of the line, and then the line's own values are unused.
+  Delete the line to remove them. In `.nec` files they are TL shunt admittances and NT cards.
 
 ## Plates
 

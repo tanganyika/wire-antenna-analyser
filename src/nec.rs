@@ -260,8 +260,15 @@ fn deck(ant: &Antenna, lay: &Layout, freq_mhz: f64, rps: &[String]) -> Result<St
             let (p, q) = (at(t.a_wire, t.a_pos), at(t.b_wire, t.b_pos));
             (0..3).map(|i| (p[i] - q[i]).powi(2)).sum::<f64>().sqrt()
         };
+        let (ys, ya, yb) = t.part_admittances(freq_mhz * 1e6);
+        if let Some(y) = ys {
+            // a lumped series part as an admittance-matrix network
+            let (y11, y12, y22) = (y + ya, -y, y + yb);
+            d += &format!("NT {} {} {} {} {} {} {} {} {} {}\n", ta, sa, tb, sb, num(y11.re), num(y11.im), num(y12.re), num(y12.im), num(y22.re), num(y22.im));
+            continue;
+        }
         let z0 = if t.reversed { -t.z0.abs() } else { t.z0.abs() };
-        d += &format!("TL {} {} {} {} {} {} 0 0 0 0\n", ta, sa, tb, sb, num(z0), num(len / t.vf.max(1e-6)));
+        d += &format!("TL {} {} {} {} {} {} {} {} {} {}\n", ta, sa, tb, sb, num(z0), num(len / t.vf.max(1e-6)), num(ya.re), num(ya.im), num(yb.re), num(yb.im));
     }
     for s in &ant.sources {
         let (tag, seg) = locate(ant, lay, s.wire, s.pos).ok_or_else(|| format!("Source on wire {} has no place to sit.", s.wire + 1))?;

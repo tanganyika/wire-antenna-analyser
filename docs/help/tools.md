@@ -45,6 +45,23 @@ It offers:
 
   Lengths are given in electrical degrees, and in metres for the **velocity factor** you set.
 
+### Adding a match to the antenna
+
+Choose a solution with its round button, then press **Add to the antenna**. Use **From last
+calculation** first, so the match is for this antenna's own impedance. The source moves to the
+transmitter side of the match, and **↶ Undo** on the View tab (Ctrl+Z) takes it all out again.
+
+- **L network**: the coil and capacitor become parts on a new line (see Transmission lines on the
+  Geometry tab), from the feed point to a new short feed wire that carries the source.
+- **Gamma match**: the driven element is split at the feed and at the strap, and the rod, strap and
+  a short feed wire with the source and series capacitor are added as wires. The rod goes below a
+  horizontal element. The formula is only a starting point, so the rod length and the capacitor
+  are then found with the antenna's own calculation.
+- **Coax sections**: the lines are added from the feed point, joined by short wires, with the
+  source on the last one.
+
+L networks and lines need the wiremom or NEC-2 engine. The parts are ideal (no loss).
+
 ## Antenna report (PDF)
 
 **Tools → Antenna report (PDF)…** writes an A4 report containing:

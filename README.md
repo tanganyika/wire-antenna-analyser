@@ -93,7 +93,11 @@ their code or files. MMANA-GAL basic is freeware for private use from <http://ww
     - coax sections: a Regier series section of a chosen impedance (75, 93,
       35 Ω, …), or a length of feeder to a real-impedance point plus a
       quarter-wave transformer, as electrical degrees and metres at a velocity
-      factor.
+      factor;
+    - **Add to the antenna** puts the chosen solution into the model: L-network
+      parts on a line from a small feed wire, the gamma rod, strap and
+      capacitor as wires (with the rod length and capacitor tuned by the model
+      itself), or the coax sections as lines.
   - **Antenna report (PDF):** an A4 report of the antenna (settings, a picture
     as on the View tab with its viewing direction, wire numbers and current
     colours, loads, lines, plates, comment), the Calculate tab's latest result,

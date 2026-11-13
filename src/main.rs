@@ -3,6 +3,7 @@
 
 mod app;
 mod maa;
+mod matching;
 mod mcp;
 mod model;
 mod mom;

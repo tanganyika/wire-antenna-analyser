@@ -150,6 +150,20 @@ pub(crate) fn not_saved(ant: &Antenna, is_ez: bool, is_nec: bool) -> Vec<String>
     v
 }
 
+/// A line's lumped parts in a few words ("series 1.8 µH, across a 103 pF"), or "—".
+pub(crate) fn parts_text(t: &TLine) -> String {
+    let p = crate::matching::part_text;
+    let v: Vec<String> = [
+        t.series.as_ref().map(|k| format!("series {}", p(k))),
+        t.shunt_a.as_ref().map(|k| format!("across from-end {}", p(k))),
+        t.shunt_b.as_ref().map(|k| format!("across to-end {}", p(k))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if v.is_empty() { "—".into() } else { v.join(", ") }
+}
+
 /// Where the report's save dialog starts: the antenna file's folder and name with
 /// .pdf, or "untitled.pdf" in the last folder used for a new antenna.
 pub(crate) fn report_target(file: Option<&std::path::Path>, last_dir: Option<&std::path::Path>) -> (Option<PathBuf>, String) {
@@ -710,6 +724,10 @@ impl App {
             self.tools.m_x = c.result.z.im;
         }
         self.tools.m_z0 = self.ant.z0;
+        // the gamma match is worked out for the driven element's own diameter
+        if let Some(w) = self.ant.sources.first().and_then(|s| self.ant.wires.get(s.wire)) {
+            self.tools.g_del = (w.r * 2e3 * 100.0).round() / 100.0;
+        }
     }
 
     fn about_window(&mut self, ctx: &egui::Context) {
@@ -902,6 +920,29 @@ impl App {
                     self.tools.match_open = true;
                 }
                 crate::tools::ToolAction::UseLast => self.fill_match_from_last(),
+                crate::tools::ToolAction::AddMatch(plan, f) => {
+                    if self.busy() {
+                        continue;
+                    }
+                    let before = self.ant.clone();
+                    match crate::matching::apply(&mut self.ant, &plan, f) {
+                        Ok(msg) => {
+                            self.undo.push(before);
+                            self.calc = None;
+                            self.wire_edit = None;
+                            let engine_note = if self.ant.engine == Engine::Mininec && !self.ant.lines.is_empty() {
+                                " MININEC can't calculate it: choose wiremom or NEC-2 under Calculate → Engine."
+                            } else {
+                                " Press Calculate to check it."
+                            };
+                            self.status = format!("{msg}{engine_note}");
+                        }
+                        Err(e) => {
+                            self.ant = before;
+                            self.error = Some(e);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1116,7 +1157,7 @@ impl App {
             if !self.ant.lines.is_empty() {
                 let mut del = None;
                 egui::Grid::new("lines").striped(true).show(ui, |ui| {
-                    for h in ["From wire", "Position", "To wire", "Position", "Z0 (Ω)", "Length (m)", "Vel. factor", "Loss (dB/100 m)", "Reversed", ""] {
+                    for h in ["From wire", "Position", "To wire", "Position", "Z0 (Ω)", "Length (m)", "Vel. factor", "Loss (dB/100 m)", "Reversed", "Parts", ""] {
                         ui.label(RichText::new(h).strong());
                     }
                     ui.end_row();
@@ -1125,14 +1166,17 @@ impl App {
                         pos_pick(ui, ("tap", i), &mut t.a_pos);
                         wire_pick(ui, ("tbw", i), &mut t.b_wire, nw);
                         pos_pick(ui, ("tbp", i), &mut t.b_pos);
-                        ui.add(egui::DragValue::new(&mut t.z0).speed(0.5).range(1.0..=10000.0));
-                        ui.add(egui::DragValue::new(&mut t.length).speed(0.01).range(0.0..=1e6).max_decimals(4))
+                        // a lumped series part replaces the line: its line values are unused
+                        let line = t.series.is_none();
+                        ui.add_enabled(line, egui::DragValue::new(&mut t.z0).speed(0.5).range(1.0..=10000.0));
+                        ui.add_enabled(line, egui::DragValue::new(&mut t.length).speed(0.01).range(0.0..=1e6).max_decimals(4))
                             .on_hover_text("0 = the straight distance between the two ends");
-                        ui.add(egui::DragValue::new(&mut t.vf).speed(0.005).range(0.1..=1.0).max_decimals(3))
+                        ui.add_enabled(line, egui::DragValue::new(&mut t.vf).speed(0.005).range(0.1..=1.0).max_decimals(3))
                             .on_hover_text("Velocity factor: 1 for an air-spaced line, about 0.66 for solid-PE coax, 0.8 for foam");
-                        ui.add(egui::DragValue::new(&mut t.loss_db).speed(0.05).range(0.0..=100.0).max_decimals(2))
+                        ui.add_enabled(line, egui::DragValue::new(&mut t.loss_db).speed(0.05).range(0.0..=100.0).max_decimals(2))
                             .on_hover_text("Matched-line loss at the calculation frequency (NEC-2 ignores it)");
-                        ui.checkbox(&mut t.reversed, "").on_hover_text("Conductors swapped at the far end (a half twist)");
+                        ui.add_enabled(line, egui::Checkbox::new(&mut t.reversed, "")).on_hover_text("Conductors swapped at the far end (a half twist)");
+                        ui.label(parts_text(t)).on_hover_text("Lumped parts, from the Match calculator's \"Add to the antenna\". Delete the line to remove them.");
                         if ui.small_button("🗑").clicked() {
                             del = Some(i);
                         }

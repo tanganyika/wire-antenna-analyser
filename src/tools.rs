@@ -57,6 +57,8 @@ pub struct ToolsState {
     pub m_x: f64,
     pub m_z0: f64,
     pub m_kind: MatchKind,
+    /// the solution chosen for "Add to the antenna" (an index into the current kind's list)
+    pub m_pick: usize,
     /// gamma: element and rod diameters, spacing (mm)
     pub g_del: f64,
     pub g_drod: f64,
@@ -82,6 +84,7 @@ impl Default for ToolsState {
             m_x: -15.0,
             m_z0: 50.0,
             m_kind: MatchKind::LNetwork,
+            m_pick: 0,
             g_del: 25.0,
             g_drod: 12.0,
             g_s: 150.0,
@@ -126,6 +129,8 @@ pub enum ToolAction {
     MatchAt(f64, C),
     /// fill the match calculator from the last calculation
     UseLast,
+    /// put the chosen match into the antenna (worked out at this frequency)
+    AddMatch(crate::matching::Plan, f64),
 }
 
 fn khz(mhz: f64) -> String {
@@ -247,10 +252,16 @@ pub fn match_window(ctx: &egui::Context, st: &mut ToolsState, have_last: bool) -
             ui.end_row();
         });
         ui.horizontal(|ui| {
+            let before = st.m_kind;
             ui.selectable_value(&mut st.m_kind, MatchKind::LNetwork, "L and C (L network)");
             ui.selectable_value(&mut st.m_kind, MatchKind::Gamma, "Gamma match");
             ui.selectable_value(&mut st.m_kind, MatchKind::Coax, "Coax sections");
+            if st.m_kind != before {
+                st.m_pick = 0;
+            }
         });
+        // the solutions shown, in order, for the radio buttons and "Add to the antenna"
+        let mut plans: Vec<crate::matching::Plan> = vec![];
         ui.separator();
         let zl = C::new(st.m_r, st.m_x);
         let f_hz = st.m_f * 1e6;
@@ -263,11 +274,13 @@ pub fn match_window(ctx: &egui::Context, st: &mut ToolsState, have_last: bool) -
                     ui.label("No L network: the resistance must be positive.");
                 }
                 for (k, (xp, xs, at_load)) in sols.iter().enumerate() {
+                    plans.push(crate::matching::Plan::LNetwork { x_shunt: *xp, x_series: *xs, shunt_first: *at_load });
                     let kind = |x: f64| if x > 0.0 { "L" } else { "C" };
                     let (first, second) = if *at_load { ("across the antenna", "in series toward the transmitter") } else { ("in series with the antenna", "across the transmitter side") };
                     let (x1, x2) = if *at_load { (*xp, *xs) } else { (*xs, *xp) };
                     let name = format!("{} {} / {} {}", kind(x1), if *at_load { "shunt" } else { "series" }, kind(x2), if *at_load { "series" } else { "shunt" });
-                    egui::CollapsingHeader::new(RichText::new(format!("Option {}: {name}", k + 1)).strong()).default_open(true).id_salt(("lnet", k)).show(ui, |ui| {
+                    ui.radio_value(&mut st.m_pick, k, RichText::new(format!("Option {}: {name}", k + 1)).strong());
+                    ui.indent(("lnet", k), |ui| {
                         let show = |ui: &mut egui::Ui, x: f64, where_: &str| {
                             if x.is_infinite() {
                                 ui.label(format!("• nothing {where_} (not needed)"));
@@ -312,6 +325,7 @@ pub fn match_window(ctx: &egui::Context, st: &mut ToolsState, have_last: bool) -
                 } else {
                     match gamma_match(zl, r0, f_hz, st.g_del * 1e-3, st.g_drod * 1e-3, st.g_s * 1e-3) {
                         Some((l, xc)) => {
+                            plans.push(crate::matching::Plan::Gamma { rod_len: l, x_series: xc, d_rod: st.g_drod * 1e-3, spacing: st.g_s * 1e-3, r0 });
                             ui.label(RichText::new(format!("Rod length (feed to shorting strap): {:.3} m", l)).strong());
                             if xc < 0.0 {
                                 ui.label(RichText::new(format!("Series capacitor: {}", part(xc, f_hz))).strong());
@@ -357,7 +371,9 @@ pub fn match_window(ctx: &egui::Context, st: &mut ToolsState, have_last: bool) -
                     ));
                 } else {
                     for (th2, th1) in &ss {
-                        ui.label(format!(
+                        let k = plans.len();
+                        plans.push(crate::matching::Plan::Lines { sections: vec![(r0, *th2), (st.c_z1, *th1)], vf: st.c_vf });
+                        ui.radio_value(&mut st.m_pick, k, format!(
                             "• from the antenna: {:.1}° of {} Ω feeder ({:.3} m at VF {}), then {:.1}° of {} Ω ({:.3} m at VF {}), then the {} Ω feeder",
                             th2, r0, len(*th2, st.c_vf), st.c_vf, th1, st.c_z1, len(*th1, st.c_vf), st.c_vf, r0
                         ));
@@ -366,7 +382,9 @@ pub fn match_window(ctx: &egui::Context, st: &mut ToolsState, have_last: bool) -
                 ui.add_space(4.0);
                 ui.label(RichText::new("Quarter-wave transformer").strong());
                 for (th, r, zq) in quarter_wave(zl, r0) {
-                    ui.label(format!(
+                    let k = plans.len();
+                    plans.push(crate::matching::Plan::Lines { sections: vec![(r0, th), (zq, 90.0)], vf: st.c_vf });
+                    ui.radio_value(&mut st.m_pick, k, format!(
                         "• {:.1}° of {} Ω feeder ({:.3} m) to where it is {:.1} Ω, then a quarter wave ({:.3} m at VF {}) of {:.1} Ω",
                         th, r0, len(th, st.c_vf), r, len(90.0, st.c_vf), st.c_vf, zq
                     ));
@@ -374,6 +392,32 @@ pub fn match_window(ctx: &egui::Context, st: &mut ToolsState, have_last: bool) -
                 ui.label(RichText::new("Lossless lines; the same velocity factor is used for both kinds of line.").small().color(Color32::GRAY));
             }
         }
+        ui.separator();
+        let chosen = plans.get(st.m_pick).cloned().filter(|p| !p.is_nothing());
+        ui.horizontal(|ui| {
+            let what = match (&chosen, st.m_kind) {
+                (None, _) if plans.get(st.m_pick).is_some() => "Nothing to add: already matched".to_string(),
+                (None, _) => "Nothing to add: no solution above".to_string(),
+                (Some(_), MatchKind::Gamma) => "Adds the rod, strap and series part as wires and a load, tuned with the antenna's calculation".into(),
+                (Some(_), MatchKind::LNetwork) => format!("Adds option {} at the feed", st.m_pick + 1),
+                (Some(_), MatchKind::Coax) => "Adds the chosen lines at the feed".into(),
+            };
+            if ui
+                .add_enabled(chosen.is_some(), egui::Button::new("Add to the antenna"))
+                .on_hover_text("The source moves to the transmitter side of the match. Undo it with ↶ Undo on the View tab (Ctrl+Z).")
+                .clicked()
+            {
+                if let Some(p) = chosen.clone() {
+                    acts.push(ToolAction::AddMatch(p, st.m_f));
+                }
+            }
+            ui.label(RichText::new(what).small().color(Color32::GRAY));
+        });
+        ui.label(
+            RichText::new("Matches the impedance entered above, so use \"From last calculation\" first. L networks and lines need the wiremom or NEC-2 engine.")
+                .small()
+                .color(Color32::GRAY),
+        );
     });
     st.match_open = open;
     acts

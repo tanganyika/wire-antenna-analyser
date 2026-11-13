@@ -128,13 +128,18 @@ pub fn build(ant: &Antenna, lambda: f64, freq_mhz: f64) -> Result<(Model, Vec<us
     }
     for t in &ant.lines {
         let (wa, wb) = (wire_of(t.a_wire, "a transmission line")?, wire_of(t.b_wire, "a transmission line")?);
-        let kind = TwoPortKind::Line {
-            z0: t.z0.abs(),
-            length: (t.length > 0.0).then_some(t.length),
-            velocity_factor: t.vf,
-            loss_db_per_100m: t.loss_db,
-            crossed: t.reversed,
-            shunt: [C::new(0.0, 0.0); 2],
+        let (ys, ya, yb) = t.part_admittances(freq_mhz * 1e6);
+        let kind = match ys {
+            // a lumped series part: y11 = y22 = y, y12 = -y, plus the shunt parts
+            Some(y) => TwoPortKind::Admittance { y11: y + ya, y12: -y, y22: y + yb },
+            None => TwoPortKind::Line {
+                z0: t.z0.abs(),
+                length: (t.length > 0.0).then_some(t.length),
+                velocity_factor: t.vf,
+                loss_db_per_100m: t.loss_db,
+                crossed: t.reversed,
+                shunt: [ya, yb],
+            },
         };
         m.add_network(Port { wire: wa, node: mesh.nearest_node(wa, t.a_pos) }, Port { wire: wb, node: mesh.nearest_node(wb, t.b_pos) }, kind);
     }

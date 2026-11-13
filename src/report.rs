@@ -546,6 +546,10 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
             .lines
             .iter()
             .map(|t| {
+                if t.series.is_some() {
+                    let no = || "—".to_string();
+                    return vec![pos_label(t.a_wire, t.a_pos), pos_label(t.b_wire, t.b_pos), no(), no(), no(), no(), no(), crate::app::parts_text(t)];
+                }
                 vec![
                     pos_label(t.a_wire, t.a_pos),
                     pos_label(t.b_wire, t.b_pos),
@@ -554,10 +558,11 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
                     f(t.vf, 3),
                     f(t.loss_db, 2),
                     if t.reversed { "yes".into() } else { "no".into() },
+                    crate::app::parts_text(t),
                 ]
             })
             .collect();
-        d.table(&["From", "To", "Z0 (Ω)", "Length (m)", "VF", "Loss (dB/100 m)", "Reversed"], &rows, 9.0);
+        d.table(&["From", "To", "Z0 (Ω)", "Length (m)", "VF", "Loss (dB/100 m)", "Reversed", "Parts"], &rows, 9.0);
     }
     if !ant.plates.is_empty() {
         d.sub("Plates");

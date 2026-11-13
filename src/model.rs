@@ -87,12 +87,28 @@ pub struct Load {
 
 impl Load {
     pub fn impedance(&self, freq_hz: f64) -> num_complex::Complex64 {
+        self.kind.impedance(freq_hz)
+    }
+}
+
+impl LoadKind {
+    /// A series inductor (X > 0) or capacitor (X < 0) with reactance `x` ohms at `freq_hz`.
+    pub fn reactance(x: f64, freq_hz: f64) -> LoadKind {
+        let w = 2.0 * std::f64::consts::PI * freq_hz;
+        if x >= 0.0 {
+            LoadKind::Lc { l_uh: x / w * 1e6, c_pf: 0.0, q: 0.0 }
+        } else {
+            LoadKind::Lc { l_uh: 0.0, c_pf: -1e12 / (w * x), q: 0.0 }
+        }
+    }
+
+    pub fn impedance(&self, freq_hz: f64) -> num_complex::Complex64 {
         use num_complex::Complex64 as C;
         // The original works with f in MHz, L in uH and C in pF (FFSolver 0x408200 / 0x407460).
         const TWO_PI: f64 = 6.283185307179586; // DAT_00425b10
         const TWO_PI_E6: f64 = 6.283185307179586e-06; // DAT_00425b08
         let f_mhz = freq_hz * 1e-6;
-        match self.kind {
+        match *self {
             LoadKind::Rx { r, x } => C::new(r, x),
             LoadKind::Lc { l_uh, c_pf, q } => {
                 let xl = f_mhz * l_uh * TWO_PI;
@@ -416,11 +432,33 @@ pub struct TLine {
     pub loss_db: f64,
     /// Conductors swapped at the far end (a half twist; NEC's negative Z0).
     pub reversed: bool,
+    /// A lumped part across end a (in parallel with whatever is there), as NEC's TL shunt admittance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shunt_a: Option<LoadKind>,
+    /// A lumped part across end b.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shunt_b: Option<LoadKind>,
+    /// A lumped part joining the two ends instead of a line (a series L or C in a matching
+    /// network): z0, length, vf, loss and reversed are then unused.  NEC's NT card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series: Option<LoadKind>,
 }
 
 impl TLine {
     pub fn new(a_wire: usize, a_pos: f64, b_wire: usize, b_pos: f64) -> TLine {
-        TLine { a_wire, a_pos, b_wire, b_pos, z0: 50.0, length: 0.0, vf: 1.0, loss_db: 0.0, reversed: false }
+        TLine { a_wire, a_pos, b_wire, b_pos, z0: 50.0, length: 0.0, vf: 1.0, loss_db: 0.0, reversed: false, shunt_a: None, shunt_b: None, series: None }
+    }
+
+    /// The lumped parts' admittances at `freq_hz`: the series part's (None for a line),
+    /// and those across end a and end b (0 when there is none).
+    pub fn part_admittances(&self, freq_hz: f64) -> (Option<num_complex::Complex64>, num_complex::Complex64, num_complex::Complex64) {
+        let y = |k: &Option<LoadKind>| k.as_ref().map(|k| 1.0 / k.impedance(freq_hz));
+        let zero = num_complex::Complex64::new(0.0, 0.0);
+        (y(&self.series), y(&self.shunt_a).unwrap_or(zero), y(&self.shunt_b).unwrap_or(zero))
+    }
+
+    pub fn has_parts(&self) -> bool {
+        self.shunt_a.is_some() || self.shunt_b.is_some() || self.series.is_some()
     }
 }
 
