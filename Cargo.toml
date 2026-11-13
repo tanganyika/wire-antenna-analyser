@@ -4,7 +4,7 @@ version = "0.3.3"
 edition = "2024"
 description = "Desktop program for modelling wire antennas (MININEC, wiremom and NEC-2 engines)"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/tanganyika/wire-antenna-analyser"
+repository = "https://github.com/tanganyika/wireant"
 
 [dependencies]
 dirs = "6"

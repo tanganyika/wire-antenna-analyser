@@ -49,12 +49,12 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([800.0, 560.0])
-            .with_title("Wire Antenna Analyser")
+            .with_title("wireant")
             .with_app_id("wireant"),
         ..Default::default()
     };
     eframe::run_native(
-        "Wire Antenna Analyser",
+        "wireant",
         options,
         Box::new(move |cc| Ok(Box::new(app::App::new(cc, open, tab, shot)))),
     )

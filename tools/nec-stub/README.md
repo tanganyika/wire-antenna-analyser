@@ -25,7 +25,7 @@ Switch EZNEC back to the real NEC afterwards.
 ## What it does not show
 
 It shows only what the calling program sends. The NEC-5 report that comes back, which is the
-part that Wire Antenna Analyser has to read, can only come from a real NEC-5 run.
+part that wireant has to read, can only come from a real NEC-5 run.
 
 ## Building
 

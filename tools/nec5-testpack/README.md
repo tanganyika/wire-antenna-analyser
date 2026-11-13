@@ -6,7 +6,7 @@ folder, as found with [nec-stub](../nec-stub)) and zips the output and messages.
 never leaves their computer. `README.txt` is the recipient's guide; it lists the decks.
 
 - Decks 01-07 were captured from the External NEC engine (a script set as the NEC program copied
-  `in.nec`), so they are exactly what Wire Antenna Analyser sends. Recapture them if the deck
+  `in.nec`), so they are exactly what wireant sends. Recapture them if the deck
   writer in `src/nec.rs` changes.
 - 08 is 01 with commas, 09 is 01 written in EZNEC's NEC-5 style, and 10 is a deck EZNEC Pro 7.0.4
   wrote for NEC-5.

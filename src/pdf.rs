@@ -242,7 +242,7 @@ impl Pdf {
         objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>".to_vec());
         objs.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Symbol >>".to_vec());
         let esc: String = title.chars().map(|c| if c.is_ascii() && c != '(' && c != ')' && c != '\\' { c } else { '_' }).collect();
-        objs.push(format!("<< /Title ({esc}) /Producer (Wire Antenna Analyser) >>").into_bytes());
+        objs.push(format!("<< /Title ({esc}) /Producer (wireant) >>").into_bytes());
         for (i, content) in self.pages.iter().enumerate() {
             objs.push(
                 format!(

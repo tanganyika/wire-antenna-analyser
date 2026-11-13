@@ -1,8 +1,8 @@
-NEC-5 test pack for Wire Antenna Analyser
+NEC-5 test pack for wireant
 =========================================
 
 Thank you for trying this. It runs your NEC-5 on ten small test decks and collects what NEC-5
-writes, so that Wire Antenna Analyser can learn to read NEC-5's output. Your NEC-5 program stays
+writes, so that wireant can learn to read NEC-5's output. Your NEC-5 program stays
 where it is: nothing copies it or sends it anywhere. The only thing to send back is a zip of
 NEC-5's output for these test decks.
 
@@ -50,7 +50,7 @@ The decks
   09  deck 01 written as EZNEC writes it      EX 4 source at a wire end, LD 5 with 6 fields
   10  a deck EZNEC Pro wrote for NEC-5        a known-good control
 
-Decks 01-08 are exactly what Wire Antenna Analyser sends to an external NEC program today. Some
+Decks 01-08 are exactly what wireant sends to an external NEC program today. Some
 of them may well fail on NEC-5: that is useful to know too, and nothing is harmed.
 
-Wire Antenna Analyser: https://github.com/tanganyika/wire-antenna-analyser
+wireant: https://github.com/tanganyika/wireant

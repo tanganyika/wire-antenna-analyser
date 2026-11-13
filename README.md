@@ -1,4 +1,4 @@
-# Wire Antenna Analyser
+# wireant
 
 A desktop program for Linux, Windows and macOS for modelling wire antennas: impedance, SWR, gain, front-to-back,
 radiation patterns (2D and 3D), frequency sweeps and an optimizer. It is written in Rust with
@@ -267,7 +267,7 @@ tab: Build → Artifacts):
   `wireant.exe`. It isn't code-signed, so SmartScreen may warn the first time: choose
   **More info → Run anyway**.
 - **macOS (Apple Silicon and Intel, macOS 11 or later):** `wireant-<version>-macos-universal.dmg`.
-  Drag **Wire Antenna Analyser** to Applications. It isn't notarised, so open it the
+  Drag **wireant** to Applications. It isn't notarised, so open it the
   first time with right-click → **Open**, or allow it in System Settings → Privacy &
   Security. Open antenna files with File → Open (double-clicking them in Finder doesn't
   load them yet).

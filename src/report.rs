@@ -494,7 +494,7 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
     d.y += 30.0;
     let src = source.map(|p| p.display().to_string()).unwrap_or_else(|| "not saved".into());
     d.para(&format!("File: {src}"), 9.0, GREY);
-    d.para(&format!("Produced by Wire Antenna Analyser {} on {stamp}", env!("CARGO_PKG_VERSION")), 9.0, GREY);
+    d.para(&format!("Produced by wireant {} on {stamp}", env!("CARGO_PKG_VERSION")), 9.0, GREY);
 
     // ---- antenna
     d.heading("Antenna");

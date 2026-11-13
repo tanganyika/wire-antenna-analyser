@@ -580,7 +580,7 @@ pub fn write(ant: &Antenna) -> String {
     for l in ant.comment.lines() {
         o += &format!("CM {}\n", l);
     }
-    o += "CM written by Wire Antenna Analyser\n";
+    o += "CM written by wireant\n";
     for (i, w) in ant.wires.iter().enumerate().filter(|(_, w)| w.insulated()) {
         o += &format!("CM wireant insulation {} {} {}\n", i + 1, w.ins_t, w.ins_eps);
     }

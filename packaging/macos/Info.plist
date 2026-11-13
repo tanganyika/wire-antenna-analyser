@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Wire Antenna Analyser</string>
+	<string>wireant</string>
 	<key>CFBundleDisplayName</key>
-	<string>Wire Antenna Analyser</string>
+	<string>wireant</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.tanganyika.wireant</string>
 	<key>CFBundleExecutable</key>

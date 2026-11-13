@@ -74,7 +74,7 @@ impl Server {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "wireant", "title": "Wire Antenna Analyser", "version": env!("CARGO_PKG_VERSION") },
+                    "serverInfo": { "name": "wireant", "title": "wireant", "version": env!("CARGO_PKG_VERSION") },
                     "instructions": INSTRUCTIONS,
                 }))
             }
@@ -601,7 +601,7 @@ pub fn save(ant: &Antenna, p: &Path) -> Result<PathBuf, String> {
     Ok(p)
 }
 
-const INSTRUCTIONS: &str = "Wire Antenna Analyser models wire antennas with method-of-moments engines. \
+const INSTRUCTIONS: &str = "wireant models wire antennas with method-of-moments engines. \
 The server holds one current antenna. Units: metres, MHz, ohms, dBi. Wires, sources and loads are \
 numbered from 0 in JSON (the program's own labels such as w1c number from 1). A source or load sits at \
 'pos' along its wire: 0 = p1 end, 0.5 = centre, 1 = p2 end. Use get_antenna to see the full JSON \

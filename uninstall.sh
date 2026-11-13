@@ -14,4 +14,4 @@ command -v update-mime-database >/dev/null 2>&1 && update-mime-database "$SHARE/
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$SHARE/applications" >/dev/null 2>&1 || true
 rm -f "$SHARE/wireant/uninstall.sh"
 rmdir "$SHARE/wireant" 2>/dev/null || true
-echo "Wire Antenna Analyser removed."
+echo "wireant removed."

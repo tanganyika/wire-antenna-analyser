@@ -1,4 +1,4 @@
-# NEC-5 test pack for Wire Antenna Analyser.
+# NEC-5 test pack for wireant.
 #
 # Runs your own NEC-5 program on each deck in the "decks" folder, the way EZNEC Pro does:
 #   "<your NEC-5 program>" "WTP01.NEC" "WTP01.OUT"
@@ -17,7 +17,7 @@ $results = Join-Path $here "results"
 $zip = Join-Path $here "nec5-results.zip"
 
 Write-Host ""
-Write-Host "NEC-5 test pack for Wire Antenna Analyser"
+Write-Host "NEC-5 test pack for wireant"
 Write-Host "-----------------------------------------"
 
 if (-not $Nec) {

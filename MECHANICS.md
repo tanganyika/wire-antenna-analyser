@@ -223,6 +223,6 @@ default (`LaunchFile=1`, `LaunchFileChecked=1`). It registers no file types. It 
 722 example antennas (`ANT\…`), which belong to the MMANA-GAL authors and aren't redistributed here.
 
 `install.sh` does the Linux equivalent per user (no root): program in `~/.local/bin`, a menu entry,
-an "Uninstall Wire Antenna Analyser" menu entry, a desktop shortcut (`NO_DESKTOP=1` skips it), and
+an "Uninstall wireant" menu entry, a desktop shortcut (`NO_DESKTOP=1` skips it), and
 a "Start it now? [Y/n]" question at the end (`NO_LAUNCH=1` skips it). Extras the original doesn't
 have: an icon, and .maa/.nec/.ez files opening with the program. `uninstall.sh` removes all of it.

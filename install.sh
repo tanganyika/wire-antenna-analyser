@@ -1,9 +1,9 @@
 #!/bin/sh
-# Install Wire Antenna Analyser for the current user (no root needed).
+# Install wireant for the current user (no root needed).
 # Mirrors what the original MMANA-GAL basic installer does (its aisetup.ini, see MECHANICS.md §11):
 #   program            -> ~/.local/bin/wireant
-#   menu entry         -> "Wire Antenna Analyser"            (original: program-group shortcut)
-#   uninstall entry    -> "Uninstall Wire Antenna Analyser"  (original: "Uninstall <AppName>" shortcut)
+#   menu entry         -> "wireant"                (original: program-group shortcut)
+#   uninstall entry    -> "Uninstall wireant"      (original: "Uninstall <AppName>" shortcut)
 #   desktop shortcut   -> on your desktop                    (original: <Desktop> shortcut; skip with NO_DESKTOP=1)
 #   start it at the end, offered with "yes" as the default   (original: LaunchFile=1, LaunchFileChecked=1)
 # Extras the original doesn't have: icon, and .maa / .nec / .ez files open with it.
@@ -12,7 +12,7 @@
 set -e
 cd "$(dirname "$0")"
 PREFIX="${PREFIX:-$HOME/.local}"
-APP="Wire Antenna Analyser"
+APP="wireant"
 
 if [ ! -x target/release/wireant ] || [ "${REBUILD:-0}" = 1 ]; then
     if ! command -v cargo >/dev/null 2>&1; then

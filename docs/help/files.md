@@ -50,7 +50,7 @@ such as Claude can build, calculate, sweep and optimize antennas with it. For Cl
 claude mcp add wireant -- /path/to/wireant --mcp
 ```
 
-The [README on GitHub](https://github.com/tanganyika/wire-antenna-analyser#use-from-an-ai-assistant-mcp)
+The [README on GitHub](https://github.com/tanganyika/wireant#use-from-an-ai-assistant-mcp)
 lists what the assistant can do.
 
 ## New versions

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Wire Antenna Analyser
+Name=wireant
 GenericName=Antenna analyser
 Comment=Model wire antennas: impedance, SWR, gain and radiation patterns (MININEC and NEC-2)
 Exec=wireant %f

@@ -2,13 +2,13 @@
 # Put this project in a new GitHub repository, using the git and gh (GitHub CLI) already
 # installed and signed in on this computer.
 #
-#   ./publish-to-github.sh                       -> private repo "wire-antenna-analyser"
+#   ./publish-to-github.sh                       -> private repo "wireant"
 #   ./publish-to-github.sh my-name --public      -> public repo "my-name"
 #
 # Running it again later just commits and pushes your newest changes.
 set -e
 cd "$(dirname "$0")"
-NAME="${1:-wire-antenna-analyser}"
+NAME="${1:-wireant}"
 VISIBILITY="${2:---private}"
 
 command -v git >/dev/null 2>&1 || { echo "git isn't installed (sudo apt install git)" >&2; exit 1; }
@@ -21,9 +21,9 @@ fi
 git add -A
 if ! git diff --cached --quiet; then
     if git rev-parse --verify -q HEAD >/dev/null; then
-        MSG="Update Wire Antenna Analyser"
+        MSG="Update wireant"
     else
-        MSG="Wire Antenna Analyser: first version"
+        MSG="wireant: first version"
     fi
     git commit -q -m "$MSG" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 fi

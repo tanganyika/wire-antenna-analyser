@@ -121,7 +121,7 @@ pub struct App {
 }
 
 /// Where new versions are published.
-const RELEASES_URL: &str = "https://github.com/tanganyika/wire-antenna-analyser/releases/latest";
+const RELEASES_URL: &str = "https://github.com/tanganyika/wireant/releases/latest";
 
 /// The Preferences dialog's working copy and its "Save and test" run.
 struct Prefs {
@@ -657,7 +657,7 @@ impl App {
                     }
                 });
                 ui.separator();
-                if ui.button("About Wire Antenna Analyser…").clicked() {
+                if ui.button("About wireant…").clicked() {
                     self.about_open = true;
                     ui.close();
                 }
@@ -721,7 +721,7 @@ impl App {
         egui::Window::new("About").collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO).show(ctx, |ui| {
             ui.set_max_width(420.0);
             ui.vertical_centered(|ui| {
-                ui.heading("Wire Antenna Analyser");
+                ui.heading("wireant");
                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
             });
             ui.add_space(6.0);
@@ -2101,7 +2101,7 @@ impl eframe::App for App {
             }
         }
         let title = format!(
-            "{}{} — Wire Antenna Analyser",
+            "{}{} — wireant",
             self.ant.name,
             self.path.as_ref().map(|p| format!(" [{}]", p.file_name().unwrap_or_default().to_string_lossy())).unwrap_or_default()
         );

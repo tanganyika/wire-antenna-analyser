@@ -1,4 +1,4 @@
-# Wire Antenna Analyser help
+# wireant help
 
 These pages are built into the program: open them from the **Help** menu, or press **F1** for the
 tab you are on.

@@ -89,7 +89,7 @@ jobs:
       - name: Package (universal .app in a .dmg)
         run: |
           VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          APP="dist/Wire Antenna Analyser.app"
+          APP="dist/wireant.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           lipo -create -output "$APP/Contents/MacOS/wireant" \
             target/aarch64-apple-darwin/release/wireant target/x86_64-apple-darwin/release/wireant
@@ -105,7 +105,7 @@ jobs:
           codesign --force --deep -s - "$APP"
           cp README.md LICENSE dist/
           ln -s /Applications dist/Applications
-          hdiutil create -volname "Wire Antenna Analyser" -srcfolder dist -ov -format UDZO wireant-$VER-macos-universal.dmg
+          hdiutil create -volname "wireant" -srcfolder dist -ov -format UDZO wireant-$VER-macos-universal.dmg
           echo "PKG=wireant-$VER-macos-universal.dmg" >> $GITHUB_ENV
       - uses: actions/upload-artifact@v4
         with:

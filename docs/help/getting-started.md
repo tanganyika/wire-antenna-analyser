@@ -1,6 +1,6 @@
 # Getting started
 
-Wire Antenna Analyser models antennas made of wires: dipoles, verticals, Yagis, quads, loops and
+wireant models antennas made of wires: dipoles, verticals, Yagis, quads, loops and
 the like. You describe the wires, a feed point and the ground, press **Calculate**, and it
 works out the feed impedance, SWR, gain, front-to-back ratio and radiation pattern.
 
