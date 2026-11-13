@@ -184,7 +184,54 @@ pub struct Imported {
     pub warnings: Vec<String>,
 }
 
+/// Settings NEC has no card for, kept in a `CM wireant settings {json}` line so that a
+/// .nec file written here opens with them again.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Extras {
+    z0: f64,
+    material: Material,
+    user_rho: f64,
+    user_mu: f64,
+    fb_az: f64,
+    fb_el: f64,
+    seg: crate::model::Segmentation,
+    /// each wire's own segment setting (0 or less = automatic), as the GW cards hold
+    /// only the count it gave
+    wire_seg: Vec<i32>,
+    /// exact places of the sources and loads (NEC puts them at segment centres)
+    source_pos: Vec<f64>,
+    load_pos: Vec<f64>,
+}
+
+const EXTRAS: &str = "wireant settings ";
+
+/// Starts the continuation of a long comment line: NEC-2 programs read at most 132
+/// characters of a line (nec2c stops with an error on a longer comment), so comments
+/// are written in lines of at most 80, split before a space where there is one.
+const CONT: &str = "CM +&";
+
+fn cm(o: &mut String, text: &str) {
+    const MAX: usize = 80;
+    let mut rest = text;
+    let mut head = "CM ";
+    loop {
+        let room = MAX - head.len();
+        if rest.chars().count() <= room {
+            *o += &format!("{head}{rest}\n");
+            return;
+        }
+        let cut = rest.char_indices().nth(room).map(|(i, _)| i).unwrap_or(rest.len());
+        // split before the last space in reach, so that no line ends in a space
+        let at = rest[..cut].rfind(' ').filter(|&i| i > room / 2).unwrap_or(cut);
+        *o += &format!("{head}{}\n", &rest[..at]);
+        rest = &rest[at..];
+        head = CONT;
+    }
+}
+const WRITTEN_BY: &str = "written by wireant";
+
 pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
+    let mut extras: Option<Extras> = None;
     let mut vars: HashMap<String, f64> = HashMap::new();
     let mut warn: Vec<String> = Vec::new();
     let mut comments: Vec<String> = Vec::new();
@@ -207,8 +254,18 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
     let mut pending_plate: Option<([f64; 3], [f64; 3], usize, usize)> = None;
     // exact line values written by this program (NEC-2 TL can't hold them): index -> (vf, loss)
     let mut tl_extra: HashMap<usize, (f64, f64)> = HashMap::new();
+    // join the continuation lines of long comments (see `cm`)
+    let mut joined: Vec<(usize, String)> = Vec::new();
     for (ln, raw) in text.lines().enumerate() {
         let line = raw.trim_end_matches('\r');
+        if let (Some(last), Some(rest)) = (joined.last_mut(), line.get(..CONT.len()).filter(|h| h.eq_ignore_ascii_case(CONT)).map(|_| &line[CONT.len()..])) {
+            last.1.push_str(rest);
+            continue;
+        }
+        joined.push((ln, line.to_string()));
+    }
+    for (ln, line) in &joined {
+        let (ln, line) = (*ln, line.as_str());
         let t = line.trim();
         if t.is_empty() || t.starts_with('\'') || t.starts_with('!') {
             continue;
@@ -219,7 +276,10 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
         match card.as_str() {
             "CM" | "CE" => {
                 let c = t.get(2..).unwrap_or("").trim().to_string();
-                if let Some(x) = c.strip_prefix("wireant insulation") {
+                if let Some(x) = c.strip_prefix(EXTRAS) {
+                    extras = serde_json::from_str(x).ok();
+                } else if c == WRITTEN_BY {
+                } else if let Some(x) = c.strip_prefix("wireant insulation") {
                     let v: Vec<f64> = x.split_whitespace().filter_map(|s| s.parse().ok()).collect();
                     if v.len() >= 3 && v[0] >= 1.0 {
                         insul.insert(v[0] as usize - 1, (v[1], v[2]));
@@ -606,6 +666,35 @@ pub fn parse(text: &str, file_name: &str) -> Result<Imported, String> {
     if ant.sources.is_empty() {
         warn.push("No voltage source (EX 0) found".into());
     }
+    if let Some(x) = extras {
+        ant.z0 = x.z0;
+        // LD 5 holds only the conductivity: wire and pipe of one metal look alike
+        if x.material.conduction(x.user_rho, x.user_mu).map(|c| c.0) == ant.material.conduction(x.user_rho, x.user_mu).map(|c| c.0) {
+            ant.material = x.material;
+        }
+        ant.user_rho = x.user_rho;
+        ant.user_mu = x.user_mu;
+        ant.fb_az = x.fb_az;
+        ant.fb_el = x.fb_el;
+        ant.seg = x.seg;
+        if x.wire_seg.len() == ant.wires.len() {
+            for (w, s) in ant.wires.iter_mut().zip(&x.wire_seg) {
+                if *s <= 0 {
+                    w.seg = *s;
+                }
+            }
+        }
+        if x.source_pos.len() == ant.sources.len() {
+            for (s, p) in ant.sources.iter_mut().zip(&x.source_pos) {
+                s.pos = *p;
+            }
+        }
+        if x.load_pos.len() == ant.loads.len() {
+            for (l, p) in ant.loads.iter_mut().zip(&x.load_pos) {
+                l.pos = *p;
+            }
+        }
+    }
     Ok(Imported { ant, warnings: warn })
 }
 
@@ -629,11 +718,24 @@ fn n(x: f64) -> String {
 /// Write the antenna as a NEC-2 card deck (one GW per wire, tag = wire number).
 pub fn write(ant: &Antenna) -> String {
     let mut o = String::new();
-    o += &format!("CM {}\n", ant.name);
+    cm(&mut o, &ant.name);
     for l in ant.comment.lines() {
-        o += &format!("CM {}\n", l);
+        cm(&mut o, l);
     }
-    o += "CM written by wireant\n";
+    o += &format!("CM {WRITTEN_BY}\n");
+    let extras = Extras {
+        z0: ant.z0,
+        material: ant.material,
+        user_rho: ant.user_rho,
+        user_mu: ant.user_mu,
+        fb_az: ant.fb_az,
+        fb_el: ant.fb_el,
+        seg: ant.seg.clone(),
+        wire_seg: ant.wires.iter().map(|w| w.seg).collect(),
+        source_pos: ant.sources.iter().map(|s| s.pos).collect(),
+        load_pos: ant.loads.iter().map(|l| l.pos).collect(),
+    };
+    cm(&mut o, &format!("{EXTRAS}{}", serde_json::to_string(&extras).unwrap_or_default()));
     for (i, w) in ant.wires.iter().enumerate().filter(|(_, w)| w.insulated()) {
         o += &format!("CM wireant insulation {} {} {}\n", i + 1, w.ins_t, w.ins_eps);
     }
@@ -642,12 +744,12 @@ pub fn write(ant: &Antenna) -> String {
     }
     // the TL/NT cards hold the parts' admittances at this frequency only; these keep the parts
     for (i, t) in ant.lines.iter().enumerate().filter(|(_, t)| t.has_parts()) {
-        o += &format!("CM wireant parts {} {}\n", i + 1, serde_json::to_string(&(&t.shunt_a, &t.shunt_b, &t.series)).unwrap_or_default());
+        cm(&mut o, &format!("wireant parts {} {}", i + 1, serde_json::to_string(&(&t.shunt_a, &t.shunt_b, &t.series)).unwrap_or_default()));
     }
     if ant.ground.second.enabled && ant.ground.kind != GroundKind::Free {
         // the full second-medium description; NEC-2 itself only reads the GD card
         // (its linear cliff runs along +X: other bearings need the antenna turned)
-        o += &format!("CM {}\n", ant.ground.second.encode());
+        cm(&mut o, &ant.ground.second.encode());
     }
     o += "CE\n";
     let lam = ant.lambda();
@@ -822,6 +924,45 @@ mod tests {
             assert!((b.ant.freq_mhz - a.freq_mhz).abs() < 1e-9);
             assert!((b.ant.wires[0].ins_eps - 3.5).abs() < 1e-9);
             assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+        }
+    }
+
+    #[test]
+    fn no_line_is_too_long_for_nec2() {
+        let mut a = Antenna::example(2);
+        a.comment = "a ".repeat(300).trim_end().to_string();
+        a.name = "n".repeat(200);
+        let t = write(&a);
+        assert!(t.lines().all(|l| l.chars().count() <= 80), "{t}");
+        let b = parse(&t, "x").unwrap().ant;
+        assert_eq!((b.name, b.comment), (a.name, a.comment));
+    }
+
+    /// Everything but the added height (folded into the wires' heights) comes back.
+    #[test]
+    fn round_trip_keeps_wireant_settings() {
+        for i in 0..Antenna::example_names().len() {
+            let mut a = Antenna::example(i);
+            a.z0 = 450.0;
+            a.fb_az = 90.0;
+            a.comment = format!("two\nlines, the second  long: {}", "word ".repeat(40) + &"x".repeat(200));
+            a.loads.push(Load { wire: 0, pos: 0.0, kind: LoadKind::Rx { r: 5.0, x: 0.0 } });
+            a.seg.dm1 = 300.0;
+            let mut b = parse(&write(&a), "x").unwrap().ant;
+            if a.ground.kind != GroundKind::Free {
+                let dz = a.ground.add_height;
+                for w in &mut b.wires {
+                    w.p1[2] -= dz;
+                    w.p2[2] -= dz;
+                }
+                b.ground.add_height = dz;
+            }
+            for w in a.wires.iter_mut().chain(b.wires.iter_mut()) {
+                for v in w.p1.iter_mut().chain(w.p2.iter_mut()) {
+                    *v = (*v * 1e6).round() / 1e6;
+                }
+            }
+            assert_eq!(b, a, "{}", a.name);
         }
     }
 
