@@ -1326,6 +1326,10 @@ impl App {
                 row(ui, "Gain", format!("{:.2} dBi  ({:.2} dBd)", r.ga_dbi, r.ga_dbi - 2.15));
                 row(ui, "F/B", format!("{:.2} dB", r.fb_db));
                 row(ui, "Efficiency", crate::mom::pct(r.eff));
+                ui.label("NEC efficiency").on_hover_text(crate::mom::NEC_EFFICIENCY_NOTE);
+                ui.label(RichText::new(format!("{}  (ground loss not counted)", crate::mom::pct(c.power.nec_efficiency()))).monospace())
+                    .on_hover_text(crate::mom::NEC_EFFICIENCY_NOTE);
+                ui.end_row();
                 row(ui, "Max at", format!("az {:.1}°  el {:.1}°", r.az_max, r.el_max));
                 row(ui, "Polarization", (if r.horizontal_pol { "Horizontal" } else { "Vertical" }).to_string());
                 row(ui, "Segments", format!("{} ({} unknowns)", r.n_segs, r.n_unknowns));
@@ -1383,13 +1387,14 @@ impl App {
             let p = &c.power;
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Power:").strong());
-                let mut hover = "Where the input power goes. Radiated: the 3D pattern's gain averaged over all directions (the efficiency). The losses are the engine's own.".to_string();
+                let mut hover = format!("Where the input power goes. {} The losses are the engine's own.", crate::mom::RADIATED_NOTE);
                 if p.ground.is_some() {
                     hover += " Ground: what the radiated power and the losses leave, including the ground wave.";
                 }
                 if p.reflection_only {
                     hover += &format!("\n\n{}", crate::mom::REFLECTION_ONLY_NOTE);
                 }
+                hover += &format!("\n\n{}", crate::mom::NEC_EFFICIENCY_NOTE);
                 ui.label(p.line()).on_hover_text(hover);
             });
         }

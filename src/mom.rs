@@ -838,8 +838,20 @@ impl PowerBudget {
 /// Shown with the power budget when [`PowerBudget::reflection_only`] is set.
 pub const REFLECTION_ONLY_NOTE: &str = "The currents were found over perfect ground, so the ground loss here is only what the ground's reflection takes; loss in the ground near the antenna is not included.";
 
+/// What "NEC efficiency" means, for hover texts, the report and MCP.
+pub const NEC_EFFICIENCY_NOTE: &str = "NEC efficiency is the share of the input power not lost in the antenna's own wires, loads and lines. It is the efficiency in NEC-2's power budget, which 4NEC2 shows. It counts power lost in the ground as radiated, so over real ground it is much higher than the share actually radiated into the sky.";
+
+/// What "Radiated" (the efficiency) means.
+pub const RADIATED_NOTE: &str = "Radiated (the efficiency) is the share of the input power that leaves into the sky: the 3D pattern's gain averaged over all directions.";
+
 impl PowerBudget {
-    /// "Radiated 62.3 %   wires 1.1 %   ground 36.6 %"
+    /// The efficiency NEC-2 reports: input power less the losses in the antenna's
+    /// wires, loads and lines. Ground loss counts as radiated.
+    pub fn nec_efficiency(&self) -> f64 {
+        1.0 - self.losses.iter().map(|l| l.1).sum::<f64>()
+    }
+
+    /// "Radiated 62.3 %   wires 1.1 %   ground 36.6 %   |   NEC efficiency 98.9 %"
     pub fn line(&self) -> String {
         let mut t = format!("Radiated {}", pct(self.radiated));
         for (k, v) in &self.losses {
@@ -848,6 +860,7 @@ impl PowerBudget {
         if let Some(g) = self.ground {
             t += &format!("   ground{} {}", if self.reflection_only { " (reflection)" } else { "" }, pct(g));
         }
+        t += &format!("   |   NEC efficiency {}", pct(self.nec_efficiency()));
         t
     }
 }
@@ -1215,6 +1228,8 @@ mod power_tests {
         // the 3-element Yagi over average ground: about a fifth goes into the ground
         let w = budget(2, Engine::Wiremom, |_| {});
         let g = w.ground.unwrap();
+        // NEC efficiency leaves the ground out: only the aluminium's loss is taken off
+        assert!((w.nec_efficiency() - (1.0 - w.losses[0].1)).abs() < 1e-12 && w.nec_efficiency() > 0.99, "{}", w.line());
         assert!(!w.reflection_only && g > 0.15 && g < 0.25, "{}", w.line());
         let m = budget(2, Engine::Mininec, |_| {});
         assert!(m.reflection_only, "MININEC finds the currents over perfect ground");

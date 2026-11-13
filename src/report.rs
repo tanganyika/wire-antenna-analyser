@@ -587,7 +587,8 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
                 ("SWR".into(), format!("{:.2} ({} Ω)", r.swr, ant.z0)),
                 ("Gain".into(), format!("{:.2} dBi ({:.2} dBd)", r.ga_dbi, r.ga_dbi - 2.15)),
                 ("Front/back".into(), format!("{:.2} dB", r.fb_db)),
-                ("Efficiency".into(), crate::mom::pct(r.eff)),
+                ("Efficiency".into(), format!("{} radiated", crate::mom::pct(r.eff))),
+                ("NEC efficiency".into(), format!("{} (ground loss not counted)", crate::mom::pct(c.power.nec_efficiency()))),
                 ("Maximum".into(), format!("azimuth {:.1}°, elevation {:.1}°", r.az_max, r.el_max)),
                 ("Polarisation".into(), if r.horizontal_pol { "horizontal".into() } else { "vertical".into() }),
                 ("Ground".into(), r.ground.label().into()),
@@ -601,8 +602,9 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
             if let Some(g) = p.ground {
                 rows.push(vec![if p.reflection_only { "Lost in the ground's reflection".into() } else { "Lost in the ground".into() }, crate::mom::pct(g)]);
             }
+            rows.push(vec!["NEC efficiency (ground loss not counted)".into(), crate::mom::pct(p.nec_efficiency())]);
             d.table(&["Input power", "Share"], &rows, 9.0);
-            let mut how = "Radiated is the 3D pattern's gain averaged over all directions.".to_string();
+            let mut how = crate::mom::RADIATED_NOTE.to_string();
             if p.ground.is_some() {
                 how += " The ground's share is what the radiated power and the other losses leave, including the ground wave.";
             }
@@ -610,6 +612,8 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
                 how += " ";
                 how += crate::mom::REFLECTION_ONLY_NOTE;
             }
+            how += " ";
+            how += crate::mom::NEC_EFFICIENCY_NOTE;
             d.para(&how, 8.0, GREY);
             if !c.warnings.is_empty() {
                 d.sub("Notes");

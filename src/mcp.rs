@@ -557,6 +557,9 @@ fn power_json(p: &mom::PowerBudget) -> Value {
     let r1 = |x: f64| (x * 1000.0).round() / 10.0;
     let mut v = json!({
         "radiated_pct": r1(p.radiated),
+        "radiated_note": mom::RADIATED_NOTE,
+        "nec_efficiency_pct": r1(p.nec_efficiency()),
+        "nec_efficiency_note": mom::NEC_EFFICIENCY_NOTE,
         "losses_pct": p.losses.iter().map(|(k, x)| (k.to_lowercase(), json!(r1(*x)))).collect::<serde_json::Map<_, _>>(),
     });
     if let Some(g) = p.ground {
@@ -800,6 +803,7 @@ mod tests {
         assert_eq!(r["power_budget"]["radiated_pct"].as_f64(), Some(eff));
         assert_eq!(r["power_budget"]["losses_pct"]["wires"].as_f64(), Some(0.0));
         assert!(r["power_budget"].get("ground_pct").is_none());
+        assert_eq!(r["power_budget"]["nec_efficiency_pct"].as_f64(), Some(100.0));
 
         // round trip through JSON and a file
         let a = tool(&mut s, "get_antenna", json!({}))["antenna"].clone();

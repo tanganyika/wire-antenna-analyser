@@ -19,7 +19,9 @@ The panel under the button shows the latest result in full:
 - **Impedance** and **SWR** against the SWR reference.
 - **Gain**, in dBi and in dBd.
 - **F/B**.
-- **Efficiency**: the share of the input power that is radiated. See Power budget below.
+- **Efficiency**: the share of the input power that is radiated into the sky. See Power budget below.
+- **NEC efficiency**: the efficiency NEC-2 and 4NEC2 give, which does not count ground loss. See
+  Power budget below.
 - **Max at**: the direction of the strongest radiation, as azimuth and elevation.
 - **Polarization**.
 - **Segments**, and the number of unknowns solved.
@@ -52,7 +54,7 @@ The results history goes into the PDF report too.
 ## Power budget
 
 The **Power** line under the table shows where the latest calculation's input power goes, for
-example `Radiated 79.5 %   wires 0.6 %   ground 19.9 %`. Hold the mouse over it for how each part
+example `Radiated 79.5 %   wires 0.6 %   ground 19.9 %   |   NEC efficiency 99.4 %`. Hold the mouse over it for how each part
 is found.
 
 - **Radiated** is the efficiency. It is the gain averaged over every direction, from the 3D pattern.
@@ -71,6 +73,22 @@ ground. For these, the ground figure is labelled **ground (reflection)**: it is 
 ground's reflection takes. The loss in the ground close to the antenna, which can be large for a
 vertical with few radials, is not included. To model it, use wiremom with buried radials or
 ground rods (wires below z = 0).
+
+### NEC efficiency
+
+**NEC efficiency** is the share of the input power that is not lost in the antenna's own wires,
+loads and lines. It is the efficiency in NEC-2's power budget, and the one 4NEC2 shows. NEC works
+out its "radiated power" as the input power less those losses, so **power lost in the ground
+counts as radiated**.
+
+In free space and over perfect ground, NEC efficiency and Radiated are the same. Over real ground
+they can be far apart. For example, an elevated quarter-wave vertical over average ground can show
+an NEC efficiency of 99 % while radiating only about 28 % of its power into the sky. That is a
+gain of about 0.9 dBi, rather than the 5.6 dBi it would have over perfect ground. Use **Radiated**
+to judge how much power reaches the sky, and NEC efficiency to compare with figures from NEC
+programs or to judge the loss in the antenna itself.
+
+### Checking the model
 
 In free space and over perfect ground, the parts should add up to 100 %. If they are a long way
 off, the model needs more segments or has a problem, as with NEC's average gain test.
