@@ -14,6 +14,7 @@ mod ez;
 mod help;
 mod optimize;
 mod plots;
+mod progress;
 mod tools;
 mod pdf;
 mod report;

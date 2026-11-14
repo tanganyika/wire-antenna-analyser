@@ -3,8 +3,8 @@
 
 use crate::model::*;
 use crate::mom;
+use crate::progress::Progress;
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
@@ -193,8 +193,11 @@ fn evaluate(ant: &Antenna, g: &Goals) -> Result<(f64, Step), String> {
     Ok((cost, Step { iter: 0, cost, r: r.z.re, x: r.z.im, swr: r.swr, ga: r.ga_dbi, fb: r.fb_db, evals: 0 }))
 }
 
-pub fn run(base: Antenna, vars: Vec<OptVar>, goals: Goals, stop: Arc<AtomicBool>, tx: Sender<Msg>, wake: impl Fn()) {
+/// Counts the steps on `prog` (out of the most allowed: it often finishes sooner)
+/// and stops when asked.
+pub fn run(base: Antenna, vars: Vec<OptVar>, goals: Goals, prog: Arc<Progress>, tx: Sender<Msg>, wake: impl Fn()) {
     let t = std::time::Instant::now();
+    prog.stage_at_most("Optimizer steps", goals.max_iter);
     let lam = base.lambda();
     let mut d = vec![0.0; vars.len()];
     let mut step = vec![lam * 0.01; vars.len()];
@@ -219,7 +222,7 @@ pub fn run(base: Antenna, vars: Vec<OptVar>, goals: Goals, stop: Arc<AtomicBool>
     let _ = tx.send(Msg::Progress(Step { evals, ..st.clone() }));
     wake();
     let mut it = 0;
-    while it < goals.max_iter && !stop.load(Ordering::Relaxed) {
+    while it < goals.max_iter && !prog.stopping() {
         it += 1;
         if step.iter().all(|s| *s < min_step) {
             break;
@@ -272,6 +275,7 @@ pub fn run(base: Antenna, vars: Vec<OptVar>, goals: Goals, stop: Arc<AtomicBool>
                 *s *= 0.4;
             }
         }
+        prog.tick();
         let _ = tx.send(Msg::Progress(Step { iter: it, evals, ..st.clone() }));
         wake();
     }
@@ -286,7 +290,7 @@ mod tests {
     fn resonate_dipole() {
         let a = Antenna::example(0);
         let (tx, rx) = std::sync::mpsc::channel();
-        run(a.clone(), vec![OptVar { wire: 0, kind: VarKind::Length }], Goals::default(), Arc::new(AtomicBool::new(false)), tx, || {});
+        run(a.clone(), vec![OptVar { wire: 0, kind: VarKind::Length }], Goals::default(), Arc::new(Progress::default()), tx, || {});
         let mut last = None;
         for m in rx.try_iter() {
             if let Msg::Progress(s) = &m { println!("step {} cost {:.4} x {:.2}", s.iter, s.cost, s.x); }
@@ -340,7 +344,7 @@ mod tests {
             a.engine = Engine::Mininec;
             let vars: Vec<OptVar> = (0..a.wires.len().min(3)).map(|w| OptVar { wire: w, kind: VarKind::Length }).collect();
             let (tx, rx) = std::sync::mpsc::channel();
-            run(a.clone(), vars, Goals::default(), Arc::new(AtomicBool::new(false)), tx, || {});
+            run(a.clone(), vars, Goals::default(), Arc::new(Progress::default()), tx, || {});
             let Some(Msg::Done { ant, failed, error, .. }) = rx.try_iter().last() else { panic!() };
             assert_eq!(failed, 0, "{}: {:?}", a.name, error);
             let (r, ..) = mom::quick(&ant, ant.freq_mhz, ant.freq_mhz, false).unwrap();

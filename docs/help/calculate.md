@@ -11,6 +11,8 @@ The Calculate tab works out the antenna at one frequency.
 - **Threads**: how many processor threads to use. All of them is fastest.
 
 Press **Calculate**, or use the ▶ Calculate button on the View, Far field and 3D pattern tabs.
+While it works, a bar counts the pattern directions (with NEC-2, its two runs); **Stop** ends it
+after the step under way.
 
 ## Last result
 

@@ -2,6 +2,7 @@
 //! networks (L networks, gamma match, series-section coax transformer).
 
 use crate::model::Antenna;
+use crate::progress::Progress;
 use eframe::egui::{self, Color32, RichText};
 use num_complex::Complex64 as C;
 use std::f64::consts::PI;
@@ -9,11 +10,20 @@ use std::f64::consts::PI;
 /// Sweeps `ant` from `f0` to `f1` MHz (impedance only, all cores), then finds and
 /// refines the resonances (see [`analyse`]).
 pub fn find(ant: &Antenna, f0: f64, f1: f64, steps: usize, limit: f64) -> Result<ResonanceReport, String> {
-    let sw = crate::mom::sweep(ant, f0, f1, steps, false)?;
+    find_tracked(ant, f0, f1, steps, limit, &Progress::default())
+}
+
+/// [`find`], reporting the sweep and then each resonance refined to `prog`, and
+/// stopping when asked.
+pub fn find_tracked(ant: &Antenna, f0: f64, f1: f64, steps: usize, limit: f64, prog: &Progress) -> Result<ResonanceReport, String> {
+    let sw = crate::mom::sweep_tracked(ant, f0, f1, steps, false, prog)?;
     let pts: Vec<(f64, C)> = sw.points.iter().map(|p| (p.freq_mhz, p.z)).collect();
     // the same segmentation as the sweep
     let seg_f = f1.max(f0).max(ant.freq_mhz);
-    analyse(pts, ant.z0, limit, |f| crate::mom::quick(ant, f, seg_f, false).map(|r| r.0.z))
+    analyse(pts, ant.z0, limit, prog, |f| {
+        prog.check()?;
+        crate::mom::quick(ant, f, seg_f, false).map(|r| r.0.z)
+    })
 }
 
 /// Quarter-wave transformer for a complex load: a length of the `z0` feeder from
@@ -137,7 +147,8 @@ fn khz(mhz: f64) -> String {
     format!("{:.1} kHz", mhz * 1000.0)
 }
 
-pub fn resonance_window(ctx: &egui::Context, st: &mut ToolsState, z0: f64, busy: bool) -> Vec<ToolAction> {
+/// `searching`: the progress of the search under way, if there is one.
+pub fn resonance_window(ctx: &egui::Context, st: &mut ToolsState, z0: f64, busy: bool, searching: Option<&Progress>) -> Vec<ToolAction> {
     let mut acts = vec![];
     let mut open = st.res_open;
     egui::Window::new("Resonance finder").open(&mut open).default_width(640.0).show(ctx, |ui| {
@@ -155,11 +166,11 @@ pub fn resonance_window(ctx: &egui::Context, st: &mut ToolsState, z0: f64, busy:
             if ui.add_enabled(!busy && st.res_f1 > st.res_f0, egui::Button::new("▶ Find resonances")).clicked() {
                 acts.push(ToolAction::FindResonances);
             }
-            if busy {
-                ui.spinner();
-            }
             ui.label(RichText::new(format!("SWR against {z0} Ω (the SWR reference on the Calculate tab)")).small().color(Color32::GRAY));
         });
+        if let Some(p) = searching {
+            crate::progress::show(ui, p);
+        }
         let Some(rep) = &st.report else {
             ui.label("Sweeps the range, finds where the reactance crosses zero, and measures the SWR bandwidth around each resonance.");
             return;
@@ -465,10 +476,20 @@ pub fn swr(z: C, z0: f64) -> f64 {
 /// Finds resonances from samples `pts` (ascending frequency), refining each
 /// reactance zero with `z_at` (a few extra solves), and measures SWR bandwidths
 /// against `z0` and against the resonant resistance (limit `limit`, e.g. 2).
-pub fn analyse(pts: Vec<(f64, C)>, z0: f64, limit: f64, mut z_at: impl FnMut(f64) -> Result<C, String>) -> Result<ResonanceReport, String> {
+/// Counts the resonances done on `prog`.
+pub fn analyse(pts: Vec<(f64, C)>, z0: f64, limit: f64, prog: &Progress, mut z_at: impl FnMut(f64) -> Result<C, String>) -> Result<ResonanceReport, String> {
     if pts.len() < 2 {
         return Err("The sweep needs at least two frequencies.".into());
     }
+    // the bar counts solves: at most 6 for the zero, 2 for the slope and 5 for each
+    // of the four band edges
+    const SOLVES: usize = 28;
+    let crossings = pts.windows(2).filter(|w| w[0].1.im != 0.0 && w[0].1.im.signum() != w[1].1.im.signum()).count();
+    prog.stage("Refining the resonances", crossings * SOLVES);
+    let mut z_at = |f: f64| {
+        prog.tick();
+        z_at(f)
+    };
     let min_swr = pts.iter().map(|&(f, z)| (f, swr(z, z0))).fold((pts[0].0, f64::INFINITY), |a, b| if b.1 < a.1 { b } else { a });
     let mut res = Vec::new();
     for w in pts.windows(2) {
@@ -511,6 +532,7 @@ pub fn analyse(pts: Vec<(f64, C)>, z0: f64, limit: f64, mut z_at: impl FnMut(f64
         let bw_ref = refine_band(&ps, f, |z| swr(z, z0), limit, &mut z_at)?;
         let bw_matched = refine_band(&ps, f, |z| swr(z, r_res), limit, &mut z_at)?;
         res.push(Resonance { f_mhz: f, z, series, swr: swr(z, z0), bw_ref, bw_matched, q });
+        prog.set_done(res.len() * SOLVES);
     }
     Ok(ResonanceReport { resonances: res, points: pts, min_swr, z0, limit })
 }
@@ -801,7 +823,7 @@ mod tests {
     #[test]
     fn finds_an_rlc_resonance_its_q_and_bandwidth() {
         let pts: Vec<(f64, C)> = (0..41).map(|i| 12.0 + 0.1 * i as f64).map(|f| (f, rlc(f))).collect();
-        let rep = analyse(pts, 50.0, 2.0, |f| Ok(rlc(f))).unwrap();
+        let rep = analyse(pts, 50.0, 2.0, &Progress::default(), |f| Ok(rlc(f))).unwrap();
         assert_eq!(rep.resonances.len(), 1);
         let r = &rep.resonances[0];
         assert!(r.series && (r.f_mhz - 14.0).abs() < 1e-6, "{r:?}");
@@ -825,7 +847,7 @@ mod tests {
         };
         let pts: Vec<(f64, C)> = (0..21).map(|i| 13.0 + 0.1 * i as f64).map(|f| (f, hq(f))).collect();
         let mut solves = 0;
-        let rep = analyse(pts, 50.0, 2.0, |f| { solves += 1; Ok(hq(f)) }).unwrap();
+        let rep = analyse(pts, 50.0, 2.0, &Progress::default(), |f| { solves += 1; Ok(hq(f)) }).unwrap();
         let r = &rep.resonances[0];
         let (lo, hi) = r.bw_ref.unwrap();
         let want = 14.0 / 2f64.sqrt() / 200.0;
@@ -838,7 +860,7 @@ mod tests {
         // the dual of the series circuit: Z = 2500 * 50 / Z_series, 2500 ohm at resonance
         let par = |f: f64| C::new(2500.0 * 50.0, 0.0) / rlc(f);
         let pts: Vec<(f64, C)> = (0..41).map(|i| 12.0 + 0.1 * i as f64).map(|f| (f, par(f))).collect();
-        let rep = analyse(pts, 50.0, 2.0, |f| Ok(par(f))).unwrap();
+        let rep = analyse(pts, 50.0, 2.0, &Progress::default(), |f| Ok(par(f))).unwrap();
         assert_eq!(rep.resonances.len(), 1);
         let r = &rep.resonances[0];
         assert!(!r.series && (r.z.re - 2500.0).abs() < 1.0, "{r:?}");

@@ -9,7 +9,8 @@ The Frequency sweep tab calculates the antenna at many frequencies and plots the
   it, only the impedance and SWR are calculated, which is quicker.
 - **Engine** and **Threads**: as on the Calculate tab.
 
-Press **Run sweep**. Three plots appear:
+Press **Run sweep**. A bar counts the frequencies done, with the time so far and roughly how long
+is left; **Stop** ends the sweep. Three plots appear:
 
 - **SWR** against the SWR reference.
 - **Impedance**: R and jX. The antenna is resonant where jX crosses zero.

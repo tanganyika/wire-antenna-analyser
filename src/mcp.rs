@@ -10,7 +10,6 @@ use crate::optimize::{self, Goals, OptVar, VarKind};
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -255,7 +254,7 @@ impl Server {
                 };
                 let base = self.with_options(a)?;
                 let (tx, rx) = std::sync::mpsc::channel();
-                optimize::run(base.clone(), vars, goals, Arc::new(AtomicBool::new(false)), tx, || {});
+                optimize::run(base.clone(), vars, goals, Arc::new(crate::progress::Progress::default()), tx, || {});
                 let mut first = None;
                 let mut last = None;
                 let mut done = None;

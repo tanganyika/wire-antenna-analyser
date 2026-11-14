@@ -3,6 +3,7 @@
 //! far-field scans and frequency sweeps all run in parallel on the rayon thread pool.
 
 use crate::model::*;
+use crate::progress::Progress;
 use num_complex::Complex64 as C;
 use rayon::prelude::*;
 use std::f64::consts::PI;
@@ -1056,9 +1057,16 @@ pub fn resolve_current_sources(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64) 
 }
 
 pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
+    calculate_tracked(ant, &Progress::default())
+}
+
+/// [`calculate`], reporting its stages to `prog` and stopping when asked.
+pub fn calculate_tracked(ant: &Antenna, prog: &Progress) -> Result<FullResult, String> {
+    prog.stage("Finding the currents", 0);
     let resolved = resolve_current_sources(ant, ant.freq_mhz, ant.freq_mhz)?;
     let ant = resolved.as_ref().unwrap_or(ant);
-    let mut r = calculate_with(ant)?;
+    prog.check()?;
+    let mut r = calculate_with(ant, prog)?;
     let near = crate::wm::near_surface(ant);
     if !near.is_empty() {
         r.warnings.push(crate::wm::near_surface_note(&near, ant));
@@ -1085,14 +1093,14 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
 /// give a few percent over 100 % on models that fail its average gain test.
 pub const MAX_RADIATED: f64 = 1.10;
 
-fn calculate_with(ant: &Antenna) -> Result<FullResult, String> {
+fn calculate_with(ant: &Antenna, prog: &Progress) -> Result<FullResult, String> {
     match ant.engine {
-        Engine::Nec2 | Engine::External => return crate::nec::calculate(ant),
-        Engine::Wiremom => return crate::wm::calculate(ant),
+        Engine::Nec2 | Engine::External => return crate::nec::calculate(ant, prog),
+        Engine::Wiremom => return crate::wm::calculate(ant, prog),
         Engine::Mininec => {}
     }
     let (mut res, mesh, sol, rad) = quick(ant, ant.freq_mhz, ant.freq_mhz, true)?;
-    let patterns = patterns(ant, &mut res, &rad.unwrap());
+    let patterns = patterns(ant, &mut res, &rad.unwrap(), prog)?;
     let warnings = mesh.warnings.clone();
     let mut losses = vec![("Wires", sol.losses[0])];
     if !ant.loads.is_empty() {
@@ -1105,13 +1113,20 @@ fn calculate_with(ant: &Antenna) -> Result<FullResult, String> {
 }
 
 /// Pattern cuts through the maximum and the 3D grid; adds the time taken to `res`.
-pub fn patterns(ant: &Antenna, res: &mut CalcResult, rad: &Radiator) -> Patterns {
+/// Counts the cuts and the grid's rows on `prog`.
+pub fn patterns(ant: &Antenna, res: &mut CalcResult, rad: &Radiator, prog: &Progress) -> Result<Patterns, String> {
+    prog.check()?;
     let t = Instant::now();
+    let grid_step = 3.0;
+    let el0 = if ant.ground.kind == GroundKind::Free { -90.0 } else { 0.0 };
+    let n_el = ((90.0 - el0) / grid_step) as usize + 1;
+    prog.stage("Working out the pattern", n_el + 2);
     let el_cut = res.el_max;
     let az_cut: Vec<(f64, Gain)> = (0..=360).into_par_iter().map(|i| {
         let a = i as f64;
         (a, rad.gain(a, el_cut))
     }).collect();
+    prog.tick();
     let azf = res.az_max;
     let el_pts: Vec<(f64, Gain)> = (0..=360).into_par_iter().map(|i| {
         let t = i as f64;
@@ -1125,18 +1140,21 @@ pub fn patterns(ant: &Antenna, res: &mut CalcResult, rad: &Radiator) -> Patterns
         };
         (t, rad.gain(a, e))
     }).collect();
-    let grid_step = 3.0;
-    let el0 = if ant.ground.kind == GroundKind::Free { -90.0 } else { 0.0 };
-    let n_el = ((90.0 - el0) / grid_step) as usize + 1;
+    prog.tick();
+    prog.check()?;
     let grid_els: Vec<f64> = (0..n_el).map(|i| el0 + i as f64 * grid_step).collect();
     let n_az = (360.0 / grid_step) as usize;
     let grid: Vec<Vec<f64>> = grid_els
         .par_iter()
-        .map(|&e| (0..n_az).map(|j| rad.gain(j as f64 * grid_step, e).total).collect())
+        .map(|&e| {
+            let row = (0..n_az).map(|j| rad.gain(j as f64 * grid_step, e).total).collect();
+            prog.tick();
+            row
+        })
         .collect();
     res.t_far_ms += t.elapsed().as_secs_f64() * 1e3;
     res.t_total_ms += t.elapsed().as_secs_f64() * 1e3;
-    Patterns {
+    Ok(Patterns {
         az_cut,
         el_cut_deg: el_cut,
         el_cut: el_pts,
@@ -1145,7 +1163,7 @@ pub fn patterns(ant: &Antenna, res: &mut CalcResult, rad: &Radiator) -> Patterns
         grid,
         grid_els,
         grid_step,
-    }
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -1166,18 +1184,27 @@ pub struct SweepResult {
 
 /// Frequency sweep: every frequency is solved on its own thread.
 pub fn sweep(ant: &Antenna, f0: f64, f1: f64, steps: usize, with_gain: bool) -> Result<SweepResult, String> {
+    sweep_tracked(ant, f0, f1, steps, with_gain, &Progress::default())
+}
+
+/// [`sweep`], counting the frequencies done on `prog` and stopping when asked.
+pub fn sweep_tracked(ant: &Antenna, f0: f64, f1: f64, steps: usize, with_gain: bool, prog: &Progress) -> Result<SweepResult, String> {
     let t = Instant::now();
     let steps = steps.max(2);
     let seg_f = f1.max(f0).max(ant.freq_mhz);
     if ant.engine == Engine::Wiremom {
+        prog.stage("Preparing the ground tables", 0);
         let freqs: Vec<f64> = (0..steps).map(|i| f0 + (f1 - f0) * i as f64 / (steps - 1) as f64).collect();
         crate::wm::prepare_sweep(ant, &freqs, seg_f);
     }
+    prog.stage("Calculating frequencies", steps);
     let pts: Result<Vec<SweepPoint>, String> = (0..steps)
         .into_par_iter()
         .map(|i| {
+            prog.check()?;
             let f = f0 + (f1 - f0) * i as f64 / (steps - 1) as f64;
             let (r, ..) = quick(ant, f, seg_f, with_gain)?;
+            prog.tick();
             Ok(SweepPoint { freq_mhz: f, z: r.z, swr: r.swr, ga_dbi: r.ga_dbi, fb_db: r.fb_db })
         })
         .collect();

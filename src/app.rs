@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::Instant;
+use crate::progress::{self, Progress, STOPPED};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Tab {
@@ -84,7 +85,8 @@ pub struct App {
     opt_log: Vec<Step>,
     opt_result: Option<(Antenna, String)>,
     opt_backup: Option<Antenna>,
-    opt_stop: Arc<AtomicBool>,
+    /// the running (or last) job's progress
+    prog: Arc<Progress>,
     new_var_wire: usize,
     new_var_kind: VarKind,
     job: Option<Job>,
@@ -223,7 +225,7 @@ impl App {
             opt_log: vec![],
             opt_result: None,
             opt_backup: None,
-            opt_stop: Arc::new(AtomicBool::new(false)),
+            prog: Arc::new(Progress::default()),
             new_var_wire: 0,
             new_var_kind: VarKind::Length,
             job: None,
@@ -334,6 +336,19 @@ impl App {
 
     fn busy(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// The Calculate job's progress, while it runs.
+    fn calc_progress(&self, ui: &mut egui::Ui) {
+        if matches!(self.job, Some(Job::Calc(..))) {
+            progress::show(ui, &self.prog);
+        }
+    }
+
+    /// A fresh progress record for a job about to start.
+    fn new_progress(&mut self) -> Arc<Progress> {
+        self.prog = Arc::new(Progress::default());
+        self.prog.clone()
     }
 
     fn set_antenna(&mut self, a: Antenna) {
@@ -471,8 +486,9 @@ impl App {
         let a = self.ant.clone();
         let n = self.threads;
         let ctx = ctx.clone();
+        let p = self.new_progress();
         std::thread::spawn(move || {
-            let r = pool(n).install(|| mom::calculate(&a));
+            let r = pool(n).install(|| mom::calculate_tracked(&a, &p));
             let _ = tx.send(r);
             ctx.request_repaint();
         });
@@ -488,8 +504,9 @@ impl App {
         let a = self.ant.clone();
         let (f0, f1, st, g, n) = (self.sweep_f0, self.sweep_f1, self.sweep_steps, self.sweep_gain, self.threads);
         let ctx = ctx.clone();
+        let p = self.new_progress();
         std::thread::spawn(move || {
-            let r = pool(n).install(|| mom::sweep(&a, f0, f1, st, g));
+            let r = pool(n).install(|| mom::sweep_tracked(&a, f0, f1, st, g, &p));
             let _ = tx.send(r);
             ctx.request_repaint();
         });
@@ -506,8 +523,7 @@ impl App {
         let vars = self.opt_vars.clone();
         let goals = self.goals.clone();
         let n = self.threads;
-        self.opt_stop.store(false, Ordering::Relaxed);
-        let stop = self.opt_stop.clone();
+        let stop = self.new_progress();
         let ctx = ctx.clone();
         self.opt_log.clear();
         self.opt_result = None;
@@ -532,6 +548,7 @@ impl App {
                     self.history.push(r.result.clone());
                     self.calc = Some(r);
                 }
+                Ok(Err(e)) if e == STOPPED => self.status = "Calculation stopped.".into(),
                 Ok(Err(e)) => {
                     self.error = Some(e);
                     self.status = "Calculation failed.".into();
@@ -544,6 +561,7 @@ impl App {
                     self.status = format!("Sweep of {} frequencies done in {:.0} ms on {} threads.", r.points.len(), r.t_ms, r.threads);
                     self.sweep = Some(r);
                 }
+                Ok(Err(e)) if e == STOPPED => self.status = "Sweep stopped.".into(),
                 Ok(Err(e)) => {
                     self.error = Some(e);
                     self.status = "Sweep failed.".into();
@@ -557,6 +575,7 @@ impl App {
                     self.tools.sel = 0;
                     self.tools.report = Some(r);
                 }
+                Ok(Err(e)) if e == STOPPED => self.status = "Resonance search stopped.".into(),
                 Ok(Err(e)) => {
                     self.error = Some(e);
                     self.status = "Resonance search failed.".into();
@@ -919,7 +938,8 @@ impl App {
 
     fn tool_windows(&mut self, ctx: &egui::Context) {
         let busy = self.busy();
-        let mut acts = crate::tools::resonance_window(ctx, &mut self.tools, self.ant.z0, busy);
+        let searching = matches!(self.job, Some(Job::Resonance(..))).then(|| self.prog.as_ref());
+        let mut acts = crate::tools::resonance_window(ctx, &mut self.tools, self.ant.z0, busy, searching);
         acts.extend(crate::tools::match_window(ctx, &mut self.tools, self.calc.is_some()));
         for a in acts {
             match a {
@@ -931,8 +951,9 @@ impl App {
                     let a = self.ant.clone();
                     let (f0, f1, n, lim, th) = (self.tools.res_f0, self.tools.res_f1, self.tools.res_steps, self.tools.res_limit, self.threads);
                     let c2 = ctx.clone();
+                    let p = self.new_progress();
                     std::thread::spawn(move || {
-                        let r = pool(th).install(|| crate::tools::find(&a, f0, f1, n, lim));
+                        let r = pool(th).install(|| crate::tools::find_tracked(&a, f0, f1, n, lim, &p));
                         let _ = tx.send(r);
                         c2.request_repaint();
                     });
@@ -1321,9 +1342,7 @@ impl App {
         if ui.add_enabled(!busy, b).clicked() {
             self.start_calc(ui.ctx());
         }
-        if busy {
-            ui.spinner();
-        }
+        self.calc_progress(ui);
         if let Some(c) = &self.calc {
             let r = &c.result;
             ui.add_space(8.0);
@@ -1463,6 +1482,7 @@ impl App {
             }
             ui.label("Rings: 0, −3, −6, −10, −20, −30 dB below the maximum (logarithmic scale).");
         });
+        self.calc_progress(ui);
         ui.separator();
         let avail = ui.available_size();
         let size = ((avail.x - 20.0) / 2.0).min(avail.y - 50.0).clamp(220.0, 900.0);
@@ -1513,6 +1533,7 @@ impl App {
                 ));
             }
         });
+        self.calc_progress(ui);
         let avail = ui.available_size();
         match &self.calc {
             Some(c) => plots::pattern3d(ui, avail, &c.patterns, &mut self.view3d_pat, self.pat_mesh, self.pat_scale, self.pat_min_db),
@@ -1539,10 +1560,10 @@ impl App {
             if ui.add_enabled(!self.busy(), egui::Button::new(RichText::new("▶ Run sweep").strong())).clicked() {
                 self.start_sweep(ui.ctx());
             }
-            if matches!(self.job, Some(Job::Sweep(..))) {
-                ui.spinner();
-            }
         });
+        if matches!(self.job, Some(Job::Sweep(..))) {
+            progress::show(ui, &self.prog);
+        }
         if let Some(s) = &self.sweep {
             ui.label(format!("{} frequencies in {:.0} ms using {} threads.", s.points.len(), s.t_ms, s.threads));
         }
@@ -1604,6 +1625,7 @@ impl App {
             ui.label(RichText::new("● source").color(Color32::from_rgb(220, 30, 30)));
             ui.label(RichText::new("■ load").color(Color32::from_rgb(20, 160, 60)));
         });
+        self.calc_progress(ui);
         ui.horizontal(|ui| {
             let was = self.view.draw;
             ui.toggle_value(&mut self.view.draw, "✏ Draw wires").on_hover_text(
@@ -1929,18 +1951,15 @@ impl App {
                 });
                 ui.label(format!("At {:.3} MHz, SWR against {:.0} Ω.", self.ant.freq_mhz, self.ant.z0));
                 ui.add_space(6.0);
+                let running = matches!(self.job, Some(Job::Opt(..)));
                 ui.horizontal(|ui| {
-                    let running = matches!(self.job, Some(Job::Opt(..)));
                     if ui.add_enabled(!self.busy() && !self.opt_vars.is_empty(), egui::Button::new(RichText::new("▶ Start").size(16.0))).clicked() {
                         self.start_opt(ui.ctx());
                     }
-                    if ui.add_enabled(running, egui::Button::new(RichText::new("■ Stop").size(16.0))).clicked() {
-                        self.opt_stop.store(true, Ordering::Relaxed);
-                    }
-                    if running {
-                        ui.spinner();
-                    }
                 });
+                if running {
+                    progress::show(ui, &self.prog);
+                }
                 if let Some((a, txt)) = self.opt_result.clone() {
                     ui.add_space(6.0);
                     ui.label(txt);

@@ -24,7 +24,8 @@ frequency. **Match…** opens the match calculator with its impedance.
 
 The bandwidth edges are found by extra calculations, so they are accurate even when the band is
 narrower than the point spacing. Large models take a while: about a second per calculation at
-1,350 unknowns.
+1,350 unknowns. A bar shows the sweep, then the refining, with the time so far and roughly how
+long is left; **Stop** ends the search.
 
 ## Match calculator
 

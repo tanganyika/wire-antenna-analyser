@@ -29,7 +29,8 @@ reference it works to.
 ## Running it
 
 Press **Start**. The **Progress** plot shows the score at each step (lower is better), and the table
-lists R, jX, SWR, gain and F/B as it goes. **Stop** ends it early.
+lists R, jX, SWR, gain and F/B as it goes. A bar counts the steps against **Most steps**; it
+usually finishes sooner. **Stop** ends it early.
 
 When it finishes, the result is described underneath. If it found a better antenna, click
 **Use optimized antenna** to replace yours with it, then press **Calculate**. **Go back to the

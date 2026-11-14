@@ -313,9 +313,9 @@ pub fn quick(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64, need_far: bool) ->
 }
 
 /// Full calculation for the Calculate tab.
-pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
+pub fn calculate(ant: &Antenna, prog: &crate::progress::Progress) -> Result<FullResult, String> {
     let (mut res, _, rad, ws, app_wire) = quick(ant, ant.freq_mhz, ant.freq_mhz, true)?;
-    let patterns = mom::patterns(ant, &mut res, &rad.unwrap());
+    let patterns = mom::patterns(ant, &mut res, &rad.unwrap(), prog)?;
     // segmentation warnings from this program's mesher (it refuses buried wires,
     // which only this engine models)
     let mut warnings = mom::build_mesh(ant, ant.lambda()).map(|m| m.warnings).unwrap_or_default();

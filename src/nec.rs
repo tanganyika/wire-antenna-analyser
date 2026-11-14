@@ -650,13 +650,17 @@ pub fn source_impedances(ant: &Antenna, freq_mhz: f64, seg_freq_mhz: f64) -> Res
 }
 
 /// Full calculation for the Calculate tab: a 3° grid (3D pattern, maximum, F/B), then 1° cuts.
-pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
+pub fn calculate(ant: &Antenna, prog: &crate::progress::Progress) -> Result<FullResult, String> {
     let t = Instant::now();
+    // two runs: the 3° grid, then the 1° cuts
+    prog.stage(if ant.engine == Engine::External { "Running the external NEC program" } else { "Running NEC-2" }, 2);
     let f = ant.freq_mhz;
     let lay = layout(ant, ant.lambda());
     let grounded = ant.ground.kind != GroundKind::Free;
     let (grid_card, grid_els) = grid_rp(grounded);
     let rep = run_deck(ant, &lay, f, &[grid_card])?;
+    prog.tick();
+    prog.check()?;
     let t1 = t.elapsed().as_secs_f64() * 1e3;
     let (mut res, pts) = result(ant, f, &lay, &rep, true, t1);
     // 1° cuts through the maximum
@@ -670,6 +674,7 @@ pub fn calculate(ant: &Antenna) -> Result<FullResult, String> {
     ];
     let t2 = Instant::now();
     let cut = run_deck(ant, &lay, f, &cards)?;
+    prog.tick();
     let az_cut: Vec<(f64, Gain)> = cut.pattern.iter().take(361).map(|p| (p[1], gain_of(p))).collect();
     let front: Vec<&[f64; 5]> = cut.pattern.iter().skip(361).take(n_th).collect();
     let back: Vec<&[f64; 5]> = cut.pattern.iter().skip(361 + n_th).take(n_th).collect();
@@ -803,7 +808,7 @@ mod tests {
             a.engine = Engine::Mininec;
             let m = mom::calculate(&a).unwrap().result;
             a.engine = Engine::Nec2;
-            let n = calculate(&a).unwrap().result;
+            let n = calculate(&a, &Default::default()).unwrap().result;
             println!("{}: MININEC Z={:.1} Ga={:.2} FB={:.1} | NEC-2 Z={:.1} Ga={:.2} FB={:.1} el={} ({:.0} ms)", a.name, m.z, m.ga_dbi, m.fb_db, n.z, n.ga_dbi, n.fb_db, n.el_max, n.t_total_ms);
             assert!((m.ga_dbi - n.ga_dbi).abs() < 1.5);
         }
@@ -821,7 +826,7 @@ mod segmentation_test {
         // lossless-limit 5.15 dBi; copper loss makes it a little less
         let mut a = Antenna::example(3);
         a.engine = Engine::Nec2;
-        let r = calculate(&a).unwrap().result;
+        let r = calculate(&a, &Default::default()).unwrap().result;
         assert!(r.ga_dbi > 5.05 && r.ga_dbi < 5.16, "{}", r.ga_dbi);
     }
 }
