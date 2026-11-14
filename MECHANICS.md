@@ -43,6 +43,11 @@ Dispatch at **0x4064b0** on the wire's segment value:
 | −1 (auto) | **0x405540** | see below |
 | −2, −3, < −10000 | 0x405c20, 0x406070, 0x405540 with DM2 = (value >> 16) & 0x7fff | not rebuilt; treated as −1 (only 2 of 4 000 example wires use −2) |
 
+wireant differs in one respect: where rounding up to even would make the segments shorter than
+the diameter again (55 → 56 when ⌊L/(2r)⌋ = 55), it steps down to the even count below (54), so
+the count stays even (a centre feed on the node between the middle segments) without breaking
+the diameter rule.
+
 Auto segmentation (0x405540), using the file's `*** Segmentation ***` line `DM1, DM2, SC, EC`:
 1. If λ/DM1 < 2r, DM1 drops to ⌊λ/(2r)⌋ and DM2 to at most DM1.
 2. A wire shorter than λ/DM1 gets 2 segments.

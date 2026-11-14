@@ -98,6 +98,17 @@ pub fn wire_segment_lengths(len: f64, lambda: f64, seg: i32, r: f64, sp: &Segmen
         }
         n as usize
     };
+    // Even, so that a centre feed sits on the node between the two middle segments
+    // (the built-in engines feed at nodes; NEC's layout makes the fed run odd).  The
+    // original rounds an odd count up, which can leave segments just under the wire
+    // diameter; this steps back down instead, unless that would leave fewer than 2.
+    let even_fit = |n: i64| -> usize {
+        let mut n = even(n);
+        while n > 2 && len / (n as f64) < 2.0 * r * (1.0 - 1e-9) {
+            n -= 2;
+        }
+        n
+    };
     let uniform = |n: usize| vec![len / n as f64; n];
     // fixed count: even, >= 2, no segment shorter than the wire diameter, 2 when lambda/L > 1500
     if seg > 0 {
@@ -108,16 +119,10 @@ pub fn wire_segment_lengths(len: f64, lambda: f64, seg: i32, r: f64, sp: &Segmen
         if lambda / len > 1500.0 {
             n = 2;
         }
-        return uniform(even(n));
+        return uniform(even_fit(n));
     }
     // zero: uniform at the longest segment length lambda/DM2
-    let uniform_dm2 = |dm2: f64| -> Vec<f64> {
-        let mut n = (len * dm2 / lambda) as i64;
-        while n > 0 && len / (n as f64) < 2.0 * r {
-            n -= 2;
-        }
-        uniform(even(n))
-    };
+    let uniform_dm2 = |dm2: f64| -> Vec<f64> { uniform(even_fit((len * dm2 / lambda) as i64)) };
     if seg == 0 {
         return uniform_dm2(sp.dm2);
     }
@@ -1214,6 +1219,26 @@ pub fn sweep_tracked(ant: &Antenna, f0: f64, f1: f64, steps: usize, with_gain: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A count cut down to keep segments at least a diameter long stays even (a centre
+    /// feed on a node) without dropping back under the diameter, as rounding 55 up did.
+    #[test]
+    fn segment_counts_fit_the_diameter_and_stay_even() {
+        let sp = Segmentation::default();
+        // 432 MHz LFA reflector from an EZNEC file: 344 mm of 6.25 mm rod, 100 segments asked
+        let lens = wire_segment_lengths(0.344, 0.6935, 100, 0.003125, &sp);
+        assert_eq!(lens.len(), 54);
+        assert!(lens.iter().all(|l| *l >= 2.0 * 0.003125));
+        // its driven element: 290 mm of 12.5 mm tube, 200 asked, fits 23 -> 22
+        assert_eq!(wire_segment_lengths(0.29, 0.6935, 200, 0.00626, &sp).len(), 22);
+        // a wire shorter than two diameters still gets the minimum of 2
+        assert_eq!(wire_segment_lengths(0.009, 0.6935, 8, 0.0047625, &sp).len(), 2);
+        // an odd count that fits is still made even
+        assert_eq!(wire_segment_lengths(10.0, 21.0, 21, 0.001, &sp).len(), 22);
+        // seg = 0 obeys the same rule
+        let n = wire_segment_lengths(0.344, 0.6935, 0, 0.003125, &sp).len();
+        assert!(n % 2 == 0 && 0.344 / n as f64 >= 2.0 * 0.003125, "{n}");
+    }
 
     #[test]
     fn dipole_free_space() {

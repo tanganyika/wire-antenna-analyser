@@ -78,8 +78,10 @@ fn lerp(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
 }
 
 /// Same segmentation as the built-in solver, grouped into runs of equal segments (one GW each).
-/// A centre feed or load that would sit on a segment boundary gets an odd middle run instead,
-/// because NEC puts sources at segment centres.
+/// A feed or load nearer a segment boundary than a segment centre (where the built-in engines
+/// put it, on the node) gets one more segment in its run, because NEC puts sources at segment
+/// centres: a centre feed on an even count then sits on the middle segment of an odd one,
+/// rather than half a segment to one side.
 fn layout(ant: &Antenna, lambda: f64) -> Layout {
     let dz = if ant.ground.kind != GroundKind::Free { ant.ground.add_height } else { 0.0 };
     let mut pieces = Vec::new();
@@ -123,7 +125,9 @@ fn layout(ant: &Antenna, lambda: f64) -> Layout {
                 let d = f * len;
                 if d > s0 && d < s0 + run_len {
                     let k = (d - s0) / run.1;
-                    if (k - k.round()).abs() < 1e-6 {
+                    // within a quarter segment of a boundary (a feed at 50.5% of a wire
+                    // with an even count, as EZNEC files often have, counts as central)
+                    if (k - k.round()).abs() < 0.25 && k.round() > 0.0 && k.round() < run.0 as f64 {
                         run.0 += 1;
                         run.1 = run_len / run.0 as f64;
                     }
@@ -765,6 +769,30 @@ pub fn calculate(ant: &Antenna, prog: &crate::progress::Progress) -> Result<Full
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A centre feed lands on the middle segment of an odd run, including one at 50.5%
+    /// (EZNEC files with an even count put it there), not half a segment to one side.
+    #[test]
+    fn centre_feeds_sit_on_the_middle_segment() {
+        for pos in [0.5, 0.505, 0.495] {
+            let mut a = Antenna::example(0);
+            a.wires[0].seg = 24;
+            a.sources[0].pos = pos;
+            let lay = layout(&a, a.lambda());
+            let n: usize = lay.by_wire[0].iter().map(|&p| lay.pieces[p].nseg).sum();
+            assert_eq!(n % 2, 1, "pos {pos}: {n} segments");
+            let (tag, seg) = locate(&a, &lay, 0, pos).unwrap();
+            let p = lay.pieces.iter().find(|p| p.tag == tag).unwrap();
+            let before: usize = lay.by_wire[0].iter().map(|&i| &lay.pieces[i]).take_while(|q| q.tag != tag).map(|q| q.nseg).sum();
+            assert_eq!(before + seg, (n + 1) / 2, "pos {pos}: segment {seg} of piece {} ({} segments)", p.tag, p.nseg);
+        }
+        // a feed well off a boundary is left where it is
+        let mut a = Antenna::example(0);
+        a.wires[0].seg = 24;
+        a.sources[0].pos = 0.52;
+        let lay = layout(&a, a.lambda());
+        assert_eq!(lay.by_wire[0].iter().map(|&p| lay.pieces[p].nseg).sum::<usize>(), 24);
+    }
 
     /// A real NEC-5 report (NEC5CL x13) for the free-space dipole deck, cut to the parts
     /// parse() reads, as Windows writes it.
