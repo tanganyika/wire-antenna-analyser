@@ -11,6 +11,7 @@ mod nec;
 mod nec_file;
 mod wm;
 mod ez;
+mod file_name;
 mod help;
 mod optimize;
 mod plots;

@@ -4,6 +4,7 @@
 //! load, calculate and optimise an antenna.  The server keeps one current antenna between
 //! calls.  Nothing else may be written to stdout; diagnostics go to stderr.
 
+use crate::file_name::Kind;
 use crate::model::*;
 use crate::mom::{self, CalcResult, Gain};
 use crate::optimize::{self, Goals, OptVar, VarKind};
@@ -133,9 +134,9 @@ impl Server {
                     Some(p) => PathBuf::from(p),
                     None => self.path.clone().ok_or_else(|| CallError::Failed("No path given and the antenna wasn't opened from a file.".into()))?,
                 };
-                let p = save(&self.ant, &p).map_err(CallError::Failed)?;
-                let ext = |e: &str| p.extension().is_some_and(|x| x.eq_ignore_ascii_case(e));
-                let left_out = crate::app::not_saved(&self.ant, ext("ez"), ext("nec"));
+                let (p, shown) = save(&self.ant, &p).map_err(CallError::Failed)?;
+                let kind = crate::file_name::kind(&shown);
+                let left_out = crate::app::not_saved(&self.ant, kind == Some(Kind::Ez), kind == Some(Kind::Nec));
                 self.path = Some(p.clone());
                 if left_out.is_empty() {
                     json!({ "saved": p })
@@ -297,7 +298,7 @@ impl Server {
                     Some(p) => PathBuf::from(p),
                     None => match &self.path {
                         Some(src) => {
-                            let (dir, name) = crate::app::report_target(Some(src), None);
+                            let (dir, name) = crate::app::report_target(Some(src), Some(&crate::file_name::display_name(src)), None);
                             dir.map(|d| d.join(&name)).unwrap_or_else(|| PathBuf::from(name))
                         }
                         None => return fail("No path given and the antenna hasn't been opened from or saved to a file.".into()),
@@ -588,36 +589,38 @@ fn result_json(r: &CalcResult) -> Value {
     })
 }
 
-fn ext_is(p: &Path, e: &str) -> bool {
-    p.extension().map(|x| x.eq_ignore_ascii_case(e)).unwrap_or(false)
-}
-
 /// Reads a .maa, .nec or .ez file as the GUI does.
+/// Reads by type, taken from the name the user sees (on Google Drive the path is only an ID).
 pub fn open(p: &Path) -> Result<(Antenna, Vec<String>), String> {
-    let bytes = std::fs::read(p).map_err(|e| format!("Couldn't open {}: {e}", p.display()))?;
-    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    let r = if ext_is(p, "ez") {
-        crate::ez::parse(&bytes, &stem).map(|r| (r.ant, r.warnings))
-    } else if ext_is(p, "nec") {
-        crate::nec_file::parse(&crate::maa::decode(&bytes), &stem).map(|r| (r.ant, r.warnings))
-    } else {
-        crate::maa::parse(&crate::maa::decode(&bytes)).map(|a| (a, vec![]))
+    let shown = crate::file_name::display_name(p);
+    let bytes = std::fs::read(p).map_err(|e| format!("Couldn't open {shown}: {e}"))?;
+    let stem = crate::file_name::stem(&shown);
+    let r = match crate::file_name::kind(&shown) {
+        Some(Kind::Ez) => crate::ez::parse(&bytes, &stem).map(|r| (r.ant, r.warnings)),
+        Some(Kind::Nec) => crate::nec_file::parse(&crate::maa::decode(&bytes), &stem).map(|r| (r.ant, r.warnings)),
+        _ => crate::maa::parse(&crate::maa::decode(&bytes)).map(|a| (a, vec![])),
     };
-    r.map_err(|e| format!("Couldn't read {}: {e}", p.display()))
+    let (mut ant, warnings) = r.map_err(|e| format!("Couldn't read {shown}: {e}"))?;
+    if ant.name.trim().is_empty() {
+        ant.name = stem;
+    }
+    Ok((ant, warnings))
 }
 
-/// Writes by extension (.maa when there is none); returns the path written.
-pub fn save(ant: &Antenna, p: &Path) -> Result<PathBuf, String> {
-    let p = if p.extension().is_none() { p.with_extension("maa") } else { p.to_path_buf() };
-    let data = if ext_is(&p, "ez") {
-        crate::ez::write(ant)
-    } else if ext_is(&p, "nec") {
-        crate::nec_file::write(ant).into_bytes()
-    } else {
-        crate::maa::write(ant).into_bytes()
+/// Writes by type (.maa when there is none); returns the path written and its name as
+/// the user sees it. An existing file is written where it is, even without an extension:
+/// on Google Drive its path is an ID, and adding .maa would make a new file named after the ID.
+pub fn save(ant: &Antenna, p: &Path) -> Result<(PathBuf, String), String> {
+    let existing = p.is_file();
+    let p = if p.extension().is_none() && !existing { p.with_extension("maa") } else { p.to_path_buf() };
+    let shown = if existing { crate::file_name::display_name(&p) } else { p.file_name().unwrap_or_default().to_string_lossy().into_owned() };
+    let data = match crate::file_name::kind(&shown) {
+        Some(Kind::Ez) => crate::ez::write(ant),
+        Some(Kind::Nec) => crate::nec_file::write(ant).into_bytes(),
+        _ => crate::maa::write(ant).into_bytes(),
     };
-    std::fs::write(&p, data).map_err(|e| format!("Couldn't save {}: {e}", p.display()))?;
-    Ok(p)
+    std::fs::write(&p, data).map_err(|e| format!("Couldn't save {shown}: {e}"))?;
+    Ok((p, shown))
 }
 
 const INSTRUCTIONS: &str = "wireant models wire antennas with method-of-moments engines. \
@@ -771,6 +774,34 @@ fn tools() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Google Drive file opened through gvfs has an ID for a name and no extension.
+    /// It should open by its contents with the name stored in it, and saving it again
+    /// should write it in place, not make "<ID>.maa" beside it.
+    #[test]
+    fn files_named_by_an_id_open_and_save_in_place() {
+        let dir = std::env::temp_dir().join(format!("wireant-id-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("1AbCdEfGhIjKlMnOpQrStUvWxYz012345");
+        let maa = "20m Test Dipole\r\n*\r\n14.2\r\n***Wires***\r\n1\r\n0.0,\t-5.0,\t10.0,\t0.0,\t5.0,\t10.0,\t0.001,\t-1\r\n***Source***\r\n1,\t0\r\nw1c,\t0.0,\t1.0\r\n***Load***\r\n0,\t0\r\n";
+        std::fs::write(&p, maa).unwrap();
+        let (mut ant, _) = open(&p).unwrap();
+        assert_eq!(ant.name, "20m Test Dipole");
+        assert_eq!(crate::file_name::suggested(None, &ant.name, "maa"), "20m Test Dipole.maa");
+        ant.name = "Renamed".into();
+        let (written, shown) = save(&ant, &p).unwrap();
+        assert_eq!(written, p);
+        assert_eq!(shown, "1AbCdEfGhIjKlMnOpQrStUvWxYz012345");
+        assert!(!p.with_extension("maa").exists());
+        assert!(std::fs::read_to_string(&p).unwrap().starts_with("Renamed\n"));
+        // a new file with no extension still gets .maa
+        let (fresh, _) = save(&ant, &dir.join("new")).unwrap();
+        assert_eq!(fresh, dir.join("new.maa"));
+        // a blank stored name falls back to the file's own name
+        std::fs::write(dir.join("Blank Name.maa"), maa.replacen("20m Test Dipole", "  ", 1)).unwrap();
+        assert_eq!(open(&dir.join("Blank Name.maa")).unwrap().0.name, "Blank Name");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn call(s: &mut Server, id: u64, method: &str, params: Value) -> Value {
         s.handle(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).unwrap()

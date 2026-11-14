@@ -1,6 +1,5 @@
 //! The main window: tabs for geometry, 3D view, calculation, patterns, sweep and optimizer.
 
-use crate::maa;
 use crate::model::*;
 use crate::mom::{self, CalcResult, FullResult, SweepResult};
 use crate::optimize::{self, Goals, OptVar, Step, VarKind};
@@ -70,6 +69,8 @@ pub struct Shot {
 pub struct App {
     ant: Antenna,
     path: Option<PathBuf>,
+    /// The file's name as the user knows it (on Google Drive the path holds only an ID)
+    file_name: Option<String>,
     tab: Tab,
     threads: usize,
     max_threads: usize,
@@ -173,11 +174,11 @@ pub(crate) fn parts_text(t: &TLine) -> String {
 
 /// Where the report's save dialog starts: the antenna file's folder and name with
 /// .pdf, or "untitled.pdf" in the last folder used for a new antenna.
-pub(crate) fn report_target(file: Option<&std::path::Path>, last_dir: Option<&std::path::Path>) -> (Option<PathBuf>, String) {
+pub(crate) fn report_target(file: Option<&std::path::Path>, name: Option<&str>, last_dir: Option<&std::path::Path>) -> (Option<PathBuf>, String) {
     match file {
         Some(p) => (
             p.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.to_path_buf()).or_else(|| last_dir.map(|d| d.to_path_buf())),
-            format!("{}.pdf", p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "untitled".into())),
+            crate::file_name::suggested(name.or_else(|| p.file_name().and_then(|n| n.to_str())), "", "pdf"),
         ),
         None => (last_dir.map(|d| d.to_path_buf()), "untitled.pdf".to_string()),
     }
@@ -190,11 +191,11 @@ mod report_target_tests {
 
     #[test]
     fn next_to_the_antenna_file_or_untitled_in_the_last_folder() {
-        let (d, n) = report_target(Some(Path::new("/home/x/Antennas/40M Tower.maa")), Some(Path::new("/tmp")));
+        let (d, n) = report_target(Some(Path::new("/home/x/Antennas/40M Tower.maa")), None, Some(Path::new("/tmp")));
         assert_eq!((d.unwrap(), n.as_str()), (PathBuf::from("/home/x/Antennas"), "40M Tower.pdf"));
-        let (d, n) = report_target(None, Some(Path::new("/home/x/last")));
+        let (d, n) = report_target(None, None, Some(Path::new("/home/x/last")));
         assert_eq!((d.unwrap(), n.as_str()), (PathBuf::from("/home/x/last"), "untitled.pdf"));
-        let (d, n) = report_target(None, None);
+        let (d, n) = report_target(None, None, None);
         assert_eq!((d, n.as_str()), (None, "untitled.pdf"));
     }
 }
@@ -210,6 +211,7 @@ impl App {
         let mut app = App {
             ant: Antenna::blank(),
             path: None,
+            file_name: None,
             tab: tab.unwrap_or(Tab::Geometry),
             threads: max_threads,
             max_threads,
@@ -378,41 +380,19 @@ impl App {
     }
 
     fn open_path(&mut self, p: PathBuf) {
-        match std::fs::read(&p) {
-            Ok(bytes) => {
-                let text = maa::decode(&bytes);
-                let is_nec = p.extension().map(|e| e.eq_ignore_ascii_case("nec")).unwrap_or(false);
-                let is_ez = p.extension().map(|e| e.eq_ignore_ascii_case("ez")).unwrap_or(false);
-                let parsed = if is_ez {
-                    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                    crate::ez::parse(&bytes, &stem).map(|r| {
-                        if !r.warnings.is_empty() {
-                            self.error = Some(format!("Opened with notes:\n• {}", r.warnings.join("\n• ")));
-                        }
-                        r.ant
-                    })
-                } else if is_nec {
-                    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                    crate::nec_file::parse(&text, &stem).map(|r| {
-                        if !r.warnings.is_empty() {
-                            self.error = Some(format!("Opened with notes:\n• {}", r.warnings.join("\n• ")));
-                        }
-                        r.ant
-                    })
-                } else {
-                    maa::parse(&text)
-                };
-                match parsed {
-                    Ok(a) => {
-                        self.set_antenna(a);
-                        self.status = format!("Opened {}", p.display());
-                        self.remember_file(&p);
-                        self.path = Some(p);
-                    }
-                    Err(e) => self.error = Some(format!("Couldn't read {}: {}", p.display(), e)),
+        match crate::mcp::open(&p) {
+            Ok((a, warnings)) => {
+                if !warnings.is_empty() {
+                    self.error = Some(format!("Opened with notes:\n• {}", warnings.join("\n• ")));
                 }
+                let shown = crate::file_name::display_name(&p);
+                self.set_antenna(a);
+                self.status = format!("Opened {shown}");
+                self.remember_file(&p);
+                self.path = Some(p);
+                self.file_name = Some(shown);
             }
-            Err(e) => self.error = Some(format!("Couldn't open {}: {}", p.display(), e)),
+            Err(e) => self.error = Some(e),
         }
     }
 
@@ -447,34 +427,27 @@ impl App {
     }
 
     fn save_to(&mut self, p: PathBuf) {
-        let p = if p.extension().is_none() { p.with_extension("maa") } else { p };
-        let is_nec = p.extension().map(|e| e.eq_ignore_ascii_case("nec")).unwrap_or(false);
-        let is_ez = p.extension().map(|e| e.eq_ignore_ascii_case("ez")).unwrap_or(false);
-        let data: Vec<u8> = if is_ez {
-            crate::ez::write(&self.ant)
-        } else if is_nec {
-            crate::nec_file::write(&self.ant).into_bytes()
-        } else {
-            maa::write(&self.ant).into_bytes()
-        };
-        let left_out = not_saved(&self.ant, is_ez, is_nec);
-        match std::fs::write(&p, data) {
-            Ok(()) => {
-                self.status = format!("Saved {}", p.display());
+        match crate::mcp::save(&self.ant, &p) {
+            Ok((p, shown)) => {
+                let kind = crate::file_name::kind(&shown);
+                let (is_ez, is_nec) = (kind == Some(crate::file_name::Kind::Ez), kind == Some(crate::file_name::Kind::Nec));
+                let left_out = not_saved(&self.ant, is_ez, is_nec);
+                self.status = format!("Saved {shown}");
                 if !left_out.is_empty() {
                     let kind = if is_ez { "EZNEC" } else { "MMANA" };
                     self.error = Some(format!(
                         "Saved with notes: {kind} files can't hold everything in this antenna, so {} left out of {}:\n• {}\n\nSave as NEC (.nec) to keep it all.",
                         if left_out.len() == 1 { "this was" } else { "these were" },
-                        p.file_name().unwrap_or_default().to_string_lossy(),
+                        shown,
                         left_out.join("\n• ")
                     ));
                     self.status += " (some parts left out)";
                 }
                 self.remember_file(&p);
                 self.path = Some(p);
+                self.file_name = Some(shown);
             }
-            Err(e) => self.error = Some(format!("Couldn't save {}: {}", p.display(), e)),
+            Err(e) => self.error = Some(e),
         }
     }
 
@@ -628,6 +601,7 @@ impl App {
                 if ui.button("New").clicked() {
                     self.set_antenna(Antenna::blank());
                     self.path = None;
+                    self.file_name = None;
                 }
                 if ui.button("Open…").clicked() {
                     if let Some(p) = self.file_dialog().pick_file() {
@@ -644,14 +618,14 @@ impl App {
                     self.save_as();
                 }
                 if ui.button("Save as EZNEC (.ez)…").clicked() {
-                    let name = format!("{}.ez", self.ant.name.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').collect::<String>().trim());
+                    let name = crate::file_name::suggested(self.file_name.as_deref(), &self.ant.name, "ez");
                     if let Some(p) = self.file_dialog().set_file_name(name).save_file() {
                         let p = if p.extension().is_none() { p.with_extension("ez") } else { p };
                         self.save_to(p);
                     }
                 }
                 if ui.button("Save as NEC (.nec)…").clicked() {
-                    let name = format!("{}.nec", self.ant.name.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').collect::<String>().trim());
+                    let name = crate::file_name::suggested(self.file_name.as_deref(), &self.ant.name, "nec");
                     if let Some(p) = self.file_dialog().set_file_name(name).save_file() {
                         let p = if p.extension().is_none() { p.with_extension("nec") } else { p };
                         self.save_to(p);
@@ -663,6 +637,7 @@ impl App {
                         if ui.button(*n).clicked() {
                             self.set_antenna(Antenna::example(i));
                             self.path = None;
+                            self.file_name = None;
                         }
                     }
                 });
@@ -730,7 +705,7 @@ impl App {
     /// Asks where to save the PDF report (next to the antenna file with its name, or
     /// "untitled.pdf" in the last folder used) and writes it.
     fn save_report(&mut self) {
-        let (dir, name) = report_target(self.path.as_deref(), self.last_dir.as_deref());
+        let (dir, name) = report_target(self.path.as_deref(), self.file_name.as_deref(), self.last_dir.as_deref());
         let mut d = rfd::FileDialog::new().set_title("Save antenna report").add_filter("PDF files (.pdf)", &["pdf", "PDF"]).set_file_name(name);
         if let Some(dir) = dir.filter(|d| d.is_dir()) {
             d = d.set_directory(dir);
@@ -1000,7 +975,7 @@ impl App {
     }
 
     fn save_as(&mut self) {
-        let name = format!("{}.maa", self.ant.name.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-').collect::<String>().trim());
+        let name = crate::file_name::suggested(self.file_name.as_deref(), &self.ant.name, "maa");
         if let Some(p) = self.file_dialog().set_file_name(name).save_file() {
             self.save_to(p);
         }
@@ -2227,7 +2202,7 @@ impl eframe::App for App {
         let title = format!(
             "{}{} — wireant",
             self.ant.name,
-            self.path.as_ref().map(|p| format!(" [{}]", p.file_name().unwrap_or_default().to_string_lossy())).unwrap_or_default()
+            self.file_name.as_ref().map(|n| format!(" [{n}]")).unwrap_or_default()
         );
         if self.frame % 30 == 1 {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
