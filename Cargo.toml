@@ -8,7 +8,8 @@ repository = "https://github.com/tanganyika/wireant"
 
 [dependencies]
 dirs = "6"
-eframe = "0.37.0"
+# wgpu (default) and glow, the fallback for graphics drivers wgpu can't use
+eframe = { version = "0.37.0", features = ["glow"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 num-complex = "0.4.6"
 rayon = "1.12.0"

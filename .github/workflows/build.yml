@@ -3,7 +3,8 @@
 # Linux: tests and a package on every push to main and every pull request.
 # Windows and macOS: only for a version tag (v*) or when run by hand (Actions tab ->
 # Build -> Run workflow), as the Windows build takes about 15 minutes.
-# A version tag also makes a GitHub release with all three packages.
+# A version tag also makes a GitHub release with the packages: Linux .deb and .tar.gz,
+# Windows installer and portable .zip, macOS .dmg.
 name: Build
 
 on:
@@ -26,24 +27,43 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release
-      - run: cargo build --release
-      - name: Package
+      # ubuntu-latest has a new glibc (2.43 on 26.04), and a binary linked there won't start on
+      # Linux Mint 21/22, Ubuntu 22.04/24.04, Debian 11/12 ...; zig links against glibc 2.31
+      # instead (this also covers the bundled NEC-2 engine, compiled with the same zig cc)
+      - name: zig and cargo-zigbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install --quiet ziglang cargo-zigbuild
+          echo "$RUNNER_TEMP/zig/bin" >> $GITHUB_PATH
+      - run: cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31
+      - name: Check the glibc it needs
+        run: |
+          B=target/x86_64-unknown-linux-gnu/release/wireant
+          NEED=$(objdump -T $B | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -Vu | tail -1)
+          echo "needs glibc $NEED"
+          [ "$(printf '%s\n' "$NEED" 2.31 | sort -V | tail -1)" = 2.31 ] || { echo "::error::needs glibc $NEED"; exit 1; }
+      - name: Package (.tar.gz and .deb)
         run: |
           VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          B=target/x86_64-unknown-linux-gnu/release/wireant
           D=wireant-$VER-linux-x86_64
-          mkdir -p $D/target/release
-          cp target/release/wireant $D/target/release/
+          mkdir -p $D/target/release dist
+          cp $B $D/target/release/
           cp -r install.sh uninstall.sh packaging README.md LICENSE $D/
-          tar czf $D.tar.gz $D
-          echo "PKG=$D.tar.gz" >> $GITHUB_ENV
+          tar czf dist/$D.tar.gz $D
+          packaging/linux/build-deb.sh $B $VER dist
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: ${{ env.PKG }}
+          path: dist/*
 
   windows:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
+    env:
+      # link the C runtime into the program, so it starts on PCs without the
+      # Visual C++ Redistributable (VCRUNTIME140.dll)
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
     steps:
       - uses: actions/checkout@v4
       - name: MinGW gcc (for NEC-2)
@@ -58,19 +78,30 @@ jobs:
       - run: gcc --version
       - run: cargo test --release
       - run: cargo build --release
-      - name: Package
+      - name: Check it needs no Visual C++ runtime
+        shell: bash
+        run: |
+          if objdump -p target/release/wireant.exe | grep -iE 'DLL Name: (vcruntime|msvcp|api-ms-win-crt)'; then
+            echo "::error::wireant.exe needs the Visual C++ runtime"; exit 1
+          fi
+      - name: Package (installer and .zip)
         shell: bash
         run: |
           VER=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          D=wireant-$VER-windows-x64
+          ISCC=$(ls "/c/Program Files (x86)"/Inno\ Setup\ */ISCC.exe "/c/Program Files"/Inno\ Setup\ */ISCC.exe 2>/dev/null | tail -1 || true)
+          if [ -z "$ISCC" ]; then
+            choco install innosetup -y --no-progress
+            ISCC=$(ls "/c/Program Files (x86)"/Inno\ Setup\ */ISCC.exe "/c/Program Files"/Inno\ Setup\ */ISCC.exe | tail -1)
+          fi
+          "$ISCC" //Q //DVersion=$VER packaging/windows/wireant.iss
+          D=wireant-$VER-windows-x64-portable
           mkdir $D
           cp target/release/wireant.exe README.md LICENSE $D/
-          7z a -tzip $D.zip $D
-          echo "PKG=$D.zip" >> $GITHUB_ENV
+          7z a -tzip dist/$D.zip $D
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: ${{ env.PKG }}
+          path: dist/*
 
   macos:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'

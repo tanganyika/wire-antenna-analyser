@@ -273,9 +273,12 @@ These are the weaker spots, with how far they have been checked.
 Download a package from the repository's Releases page (or the latest run on the Actions
 tab: Build → Artifacts):
 
-- **Windows:** `wireant-<version>-windows-x64.zip`. Unzip it anywhere and run
-  `wireant.exe`. It isn't code-signed, so SmartScreen may warn the first time: choose
-  **More info → Run anyway**.
+- **Windows 10 or 11:** `wireant-<version>-windows-x64-setup.exe` installs it (for you
+  alone, no administrator rights needed, or for all users) with a Start menu entry, an
+  optional desktop shortcut, `.maa`/`.nec`/`.ez` file types and an uninstaller in
+  Settings → Apps. Or take `wireant-<version>-windows-x64-portable.zip`, unzip it anywhere
+  and run `wireant.exe`. Neither is code-signed, so SmartScreen may warn the first time:
+  choose **More info → Run anyway**.
 - **macOS (Apple Silicon and Intel, macOS 11 or later):** `wireant-<version>-macos-universal.dmg`.
   Drag **wireant** to Applications. It isn't notarised, so open it the
   first time with right-click → **Open**, or allow it in System Settings → Privacy &
@@ -292,8 +295,22 @@ Windows and macOS packages without a release, use Actions → Build → **Run wo
 
 ## Install on Linux
 
-A Linux package (`wireant-<version>-linux-x86_64.tar.gz`) comes with each release: unpack it
-and run `./install.sh`. To build it yourself you need Rust (<https://rustup.rs>) and a C
+Each release has two Linux packages (x86-64, glibc 2.31 or newer: Linux Mint 20 or later,
+Ubuntu 20.04 or later, Debian 11 or later, Fedora, openSUSE ...):
+
+- `wireant_<version>_amd64.deb` for Linux Mint, Ubuntu, Debian, Zorin, Pop!_OS: open it
+  to install with the software installer, or `sudo apt install ./wireant_<version>_amd64.deb`.
+  It installs `/usr/bin/wireant` with a menu entry, icon and file types; remove it with
+  `sudo apt remove wireant`.
+- `wireant-<version>-linux-x86_64.tar.gz` for any distribution, without root: unpack it and
+  run `./install.sh` (installs to `~/.local`).
+
+If the window doesn't open, wireant tries plain OpenGL after the default renderer
+(Vulkan/OpenGL ES), says why in a message box if neither works, and leaves the
+message in `~/.cache/wireant/startup-error.txt` (`%LOCALAPPDATA%\wireant` on Windows).
+`WIREANT_RENDERER=glow` starts it with OpenGL straight away.
+
+ To build it yourself you need Rust (<https://rustup.rs>) and a C
 compiler (`sudo apt install build-essential` on Debian/Ubuntu/Zorin). Cargo fetches the
 wiremom engine from <https://github.com/tanganyika/wiremom> at the commit pinned in
 `Cargo.lock`. Then:
