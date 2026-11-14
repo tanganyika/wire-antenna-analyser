@@ -58,6 +58,8 @@ enum Job {
     Sweep(Receiver<Result<SweepResult, String>>, Instant),
     Opt(Receiver<optimize::Msg>, Instant),
     Resonance(Receiver<Result<crate::tools::ResonanceReport, String>>, Instant),
+    /// the engine comparison report, to be saved to this path
+    Compare(Receiver<Result<crate::report::Comparison, String>>, Instant, PathBuf),
 }
 
 pub struct Shot {
@@ -542,6 +544,33 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Empty) => self.job = Some(Job::Sweep(rx, t)),
                 Err(_) => self.status = "Sweep stopped.".into(),
             },
+            Job::Compare(rx, t, p) => match rx.try_recv() {
+                Ok(Ok(cmp)) => {
+                    let bytes = crate::report::build_comparison(&self.ant, self.path.as_deref(), &cmp);
+                    match std::fs::write(&p, bytes) {
+                        Ok(()) => {
+                            self.remember_dir(&p);
+                            let failed: Vec<&str> = cmp.runs.iter().filter(|r| r.calc.is_err() || r.sweep.is_err()).map(|r| r.label.as_str()).collect();
+                            let opened = open_in_viewer(&p);
+                            self.status = format!(
+                                "Engine comparison saved to {} in {:.0} s{}{}",
+                                p.display(),
+                                t.elapsed().as_secs_f64(),
+                                if failed.is_empty() { String::new() } else { format!(" ({} failed: see the report)", failed.join(", ")) },
+                                if opened { "" } else { "; couldn't open a PDF viewer" }
+                            );
+                        }
+                        Err(e) => self.error = Some(format!("Couldn't save the report to {}: {}", p.display(), e)),
+                    }
+                }
+                Ok(Err(e)) if e == STOPPED => self.status = "Engine comparison stopped.".into(),
+                Ok(Err(e)) => {
+                    self.error = Some(e);
+                    self.status = "Engine comparison failed.".into();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => self.job = Some(Job::Compare(rx, t, p)),
+                Err(_) => self.status = "Engine comparison stopped.".into(),
+            },
             Job::Resonance(rx, t) => match rx.try_recv() {
                 Ok(Ok(r)) => {
                     self.status = format!("Found {} resonance(s) in {:.0} ms.", r.resonances.len(), t.elapsed().as_secs_f64() * 1e3);
@@ -671,6 +700,16 @@ impl App {
                     ui.close();
                     self.save_report();
                 }
+                // only when there is an external NEC program to compare with
+                if crate::nec::engine_available(Engine::External)
+                    && ui
+                        .add_enabled(!self.busy(), egui::Button::new("Engine comparison report (PDF)…"))
+                        .on_hover_text("This antenna calculated with wiremom and with your external NEC program, side by side: impedance, SWR, gain, F/B, patterns and a sweep")
+                        .clicked()
+                {
+                    ui.close();
+                    self.start_compare(ui.ctx());
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.add(egui::Button::new("Help for this tab").shortcut_text("F1")).clicked() {
@@ -735,12 +774,51 @@ impl App {
         }
     }
 
+    /// Asks where to save the engine comparison report, then calculates the antenna
+    /// with both engines in the background; [`Self::poll`] writes it.
+    fn start_compare(&mut self, ctx: &egui::Context) {
+        if self.busy() {
+            return;
+        }
+        let (dir, name) = report_target(self.path.as_deref(), self.file_name.as_deref(), self.last_dir.as_deref());
+        let name = format!("{} engine comparison.pdf", name.strip_suffix(".pdf").unwrap_or(&name));
+        let mut d = rfd::FileDialog::new().set_title("Save engine comparison report").add_filter("PDF files (.pdf)", &["pdf", "PDF"]).set_file_name(name);
+        if let Some(dir) = dir.filter(|d| d.is_dir()) {
+            d = d.set_directory(dir);
+        }
+        let Some(p) = d.save_file() else { return };
+        let p = if p.extension().is_none() { p.with_extension("pdf") } else { p };
+        let (tx, rx) = channel();
+        let a = self.ant.clone();
+        let n = self.threads;
+        let ctx = ctx.clone();
+        let prog = self.new_progress();
+        std::thread::spawn(move || {
+            let r = pool(n).install(|| crate::report::compare(&a, &prog));
+            let _ = tx.send(r);
+            ctx.request_repaint();
+        });
+        self.job = Some(Job::Compare(rx, Instant::now(), p));
+        self.status = "Calculating with wiremom and the external NEC program…".into();
+    }
+
+    /// The comparison job's progress, in a window of its own while it runs.
+    fn compare_progress(&self, ctx: &egui::Context) {
+        if matches!(self.job, Some(Job::Compare(..))) {
+            egui::Window::new("Engine comparison report").collapsible(false).resizable(false).show(ctx, |ui| {
+                ui.label("Calculating with wiremom, then with the external NEC program, each at the antenna's frequency and over a sweep.");
+                progress::show(ui, &self.prog);
+            });
+        }
+    }
+
     /// The match calculator's load from the last calculation, if there is one.
     fn fill_match_from_last(&mut self) {
         if let Some(c) = &self.calc {
             self.tools.m_f = c.result.freq_mhz;
             self.tools.m_r = c.result.z.re;
             self.tools.m_x = c.result.z.im;
+            self.tools.m_set = true;
         }
         self.tools.m_z0 = self.ant.z0;
         // the gamma match is worked out for the driven element's own diameter
@@ -944,6 +1022,7 @@ impl App {
                     self.tools.m_r = z.re;
                     self.tools.m_x = z.im;
                     self.tools.m_z0 = self.ant.z0;
+                    self.tools.m_set = true;
                     self.tools.match_open = true;
                 }
                 crate::tools::ToolAction::UseLast => self.fill_match_from_last(),
@@ -2168,6 +2247,7 @@ impl eframe::App for App {
         if self.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+        self.compare_progress(&ctx);
         if let Some(shot) = &mut self.shot {
             ctx.request_repaint();
             if shot.done.load(Ordering::Relaxed) {

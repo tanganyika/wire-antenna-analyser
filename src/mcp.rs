@@ -313,6 +313,7 @@ impl Server {
                 st.m_f = calc.result.freq_mhz;
                 st.m_r = calc.result.z.re;
                 st.m_x = calc.result.z.im;
+                st.m_set = true;
                 if a.get("resonances").and_then(Value::as_bool).unwrap_or(true) {
                     if let Some(f0) = a.get("res_f_start_mhz").and_then(Value::as_f64) {
                         st.res_f0 = f0;

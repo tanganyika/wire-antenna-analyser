@@ -1,6 +1,7 @@
 # Tools
 
-The **Tools** menu holds the resonance finder, the match calculator and the PDF report.
+The **Tools** menu holds the resonance finder, the match calculator, the PDF report and, with an
+external NEC program set, the engine comparison report.
 
 ## Resonance finder
 
@@ -77,3 +78,24 @@ L networks and lines need the wiremom or NEC-2 engine. The parts are ideal (no l
 
 The save dialog suggests the antenna file's name ending in `.pdf`. Once saved, the report opens in
 your PDF viewer.
+
+The Matching section matches the impedance you gave the match calculator. If you haven't used it,
+the section matches the latest calculation's impedance instead, and it says so when the antenna is
+already matched.
+
+## Engine comparison report (PDF)
+
+**Tools → Engine comparison report (PDF)…** is there once an external NEC program is set (File →
+Preferences). It calculates the antenna with wiremom and with your NEC program, and writes an A4
+report with the two side by side:
+
+- Impedance, SWR, gain, F/B, the direction of the maximum, efficiency and time, with the
+  difference between them.
+- The horizontal and vertical patterns of both on the same plots, against the higher of the two
+  maxima, so a difference in gain shows as well as one in shape.
+- SWR, gain, R and jX over a 21-point sweep from 5% below to 5% above the antenna's frequency.
+- Each engine's notes, and any error if one of them couldn't calculate the antenna.
+
+It needs both engines to run the antenna, then the sweep, so it takes a while on a large model. A
+bar shows how far it has got, and **Stop** ends it without writing the report. The save dialog
+suggests the antenna file's name ending in `engine comparison.pdf`.

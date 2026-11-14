@@ -39,7 +39,15 @@ impl Rd<'_> {
         self.0.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0)
     }
     fn f(&self, o: usize) -> f64 {
-        self.0.get(o..o + 4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64).unwrap_or(0.0)
+        // single precision: take the shortest decimal that gives the same f32 (432.3,
+        // not 432.29998779296875), as EZNEC shows it
+        self.0
+            .get(o..o + 4)
+            .map(|b| {
+                let v = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                v.to_string().parse::<f64>().unwrap_or(v as f64)
+            })
+            .unwrap_or(0.0)
     }
 }
 

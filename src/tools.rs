@@ -66,6 +66,9 @@ pub struct ToolsState {
     pub m_r: f64,
     pub m_x: f64,
     pub m_z0: f64,
+    /// the impedance was typed in or taken from a calculation (not just the
+    /// placeholder a newly loaded antenna gets)
+    pub m_set: bool,
     pub m_kind: MatchKind,
     /// the solution chosen for "Add to the antenna" (an index into the current kind's list)
     pub m_pick: usize,
@@ -93,6 +96,7 @@ impl Default for ToolsState {
             m_r: 25.0,
             m_x: -15.0,
             m_z0: 50.0,
+            m_set: false,
             m_kind: MatchKind::LNetwork,
             m_pick: 0,
             g_del: 25.0,
@@ -121,6 +125,7 @@ impl ToolsState {
         self.m_z0 = ant.z0;
         self.m_r = ant.z0;
         self.m_x = 0.0;
+        self.m_set = false;
     }
 
     /// Before opening the resonance finder: a range that holds the design
@@ -248,18 +253,26 @@ pub fn match_window(ctx: &egui::Context, st: &mut ToolsState, have_last: bool) -
         egui::Grid::new("match_in").spacing([8.0, 6.0]).show(ui, |ui| {
             ui.label("Antenna impedance");
             ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut st.m_r).speed(0.1).range(0.01..=100000.0).prefix("R ").suffix(" Ω"));
-                ui.add(egui::DragValue::new(&mut st.m_x).speed(0.1).range(-100000.0..=100000.0).prefix("X ").suffix(" Ω"));
+                if ui.add(egui::DragValue::new(&mut st.m_r).speed(0.1).range(0.01..=100000.0).prefix("R ").suffix(" Ω")).changed() {
+                    st.m_set = true;
+                }
+                if ui.add(egui::DragValue::new(&mut st.m_x).speed(0.1).range(-100000.0..=100000.0).prefix("X ").suffix(" Ω")).changed() {
+                    st.m_set = true;
+                }
                 if ui.add_enabled(have_last, egui::Button::new("From last calculation")).clicked() {
                     acts.push(ToolAction::UseLast);
                 }
             });
             ui.end_row();
             ui.label("Frequency");
-            ui.add(egui::DragValue::new(&mut st.m_f).speed(0.01).range(0.001..=100000.0).suffix(" MHz"));
+            if ui.add(egui::DragValue::new(&mut st.m_f).speed(0.01).range(0.001..=100000.0).suffix(" MHz")).changed() {
+                st.m_set = true;
+            }
             ui.end_row();
             ui.label("Match to");
-            ui.add(egui::DragValue::new(&mut st.m_z0).speed(0.5).range(1.0..=10000.0).suffix(" Ω"));
+            if ui.add(egui::DragValue::new(&mut st.m_z0).speed(0.5).range(1.0..=10000.0).suffix(" Ω")).changed() {
+                st.m_set = true;
+            }
             ui.end_row();
         });
         ui.horizontal(|ui| {
@@ -693,6 +706,9 @@ pub fn series_section(zl: C, z0: f64, z1: f64) -> Vec<(f64, f64)> {
     // looking back from the feeder through the section, z0 must land on the circle.
     let g_load = ((zl - z0) / (zl + z0)).norm();
     let mut out = vec![];
+    if g_load < 1e-6 || (z1 - z0).abs() < 1e-9 {
+        return out;
+    }
     let f = |th1: f64| {
         // impedance the section presents looking toward the load must be z0 when
         // fed with the point of the circle; invert: z0 seen back through the section

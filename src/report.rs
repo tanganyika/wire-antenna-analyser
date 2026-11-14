@@ -18,6 +18,9 @@ const ACCENT: [f64; 3] = [0.10, 0.27, 0.55];
 const TOTAL: [f64; 3] = [0.78, 0.12, 0.16];
 const HOR: [f64; 3] = [0.12, 0.35, 0.78];
 const VER: [f64; 3] = [0.08, 0.59, 0.27];
+// the comparison report's two engines
+const ENGINE_A: [f64; 3] = [0.78, 0.12, 0.16];
+const ENGINE_B: [f64; 3] = [0.10, 0.27, 0.55];
 
 struct Doc {
     pdf: Pdf,
@@ -173,6 +176,51 @@ fn z_text(z: C) -> String {
     format!("{:.2} {} j{:.2} Ω", z.re, if z.im < 0.0 { "−" } else { "+" }, z.im.abs())
 }
 
+/// Notes, with "Wire N: …" notes that say the same thing joined into one:
+/// "Wires 1–6, 10, 16–18: …".
+fn group_notes(ws: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let mut groups: Vec<(String, Vec<usize>)> = vec![];
+    // where each group's line goes, so the order of first appearance is kept
+    let mut at: Vec<usize> = vec![];
+    for w in ws {
+        let parsed = w.strip_prefix("Wire ").and_then(|r| r.split_once(": ")).and_then(|(n, msg)| n.parse::<usize>().ok().map(|n| (n, msg)));
+        match parsed {
+            Some((n, msg)) => match groups.iter_mut().find(|g| g.0 == msg) {
+                Some(g) => g.1.push(n),
+                None => {
+                    groups.push((msg.to_string(), vec![n]));
+                    at.push(out.len());
+                    out.push(String::new());
+                }
+            },
+            None => out.push(w.clone()),
+        }
+    }
+    for ((msg, mut ns), i) in groups.into_iter().zip(at) {
+        ns.sort_unstable();
+        ns.dedup();
+        let mut parts: Vec<String> = vec![];
+        let mut k = 0;
+        while k < ns.len() {
+            let mut e = k;
+            while e + 1 < ns.len() && ns[e + 1] == ns[e] + 1 {
+                e += 1;
+            }
+            parts.push(if e > k { format!("{}–{}", ns[k], ns[e]) } else { ns[k].to_string() });
+            k = e + 1;
+        }
+        out[i] = format!("{} {}: {msg}", if ns.len() == 1 { "Wire" } else { "Wires" }, parts.join(", "));
+    }
+    out
+}
+
+/// A frequency without float noise: up to 6 decimals, trailing zeros dropped.
+fn mhz(v: f64) -> String {
+    let t = format!("{:.6}", v);
+    t.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 fn f(v: f64, d: usize) -> String {
     let s = format!("{v:.d$}");
     if s.starts_with('-') { format!("−{}", &s[1..]) } else { s }
@@ -186,9 +234,8 @@ fn load_text(k: &LoadKind) -> String {
     }
 }
 
-/// Polar pattern like the app's: rings at 0, −3, −6, −10, −20, −30 dB below the
-/// maximum (ARRL log scale), total (red), horizontal (blue), vertical (green).
-fn polar(pdf: &mut Pdf, cx: f64, cy: f64, r0: f64, data: &[(f64, Gain)], elevation: Option<bool>, title: &str, info: &[String]) {
+/// A polar plot's rings, spokes, angle labels and title.
+fn polar_frame(pdf: &mut Pdf, cx: f64, cy: f64, r0: f64, elevation: Option<bool>, title: &str) {
     pdf.text_centre(cx, cy - r0 - 26.0, 10.5, Font::Bold, INK, title);
     let half = elevation == Some(true);
     for (db, lab) in [(0.0, ""), (-3.0, "−3"), (-6.0, "−6"), (-10.0, "−10"), (-20.0, "−20"), (-30.0, "−30")] {
@@ -223,6 +270,42 @@ fn polar(pdf: &mut Pdf, cx: f64, cy: f64, r0: f64, data: &[(f64, Gain)], elevati
         let (x, y) = (cx + (r0 + 9.0) * ar.cos(), cy - (r0 + 9.0) * ar.sin() + 3.0);
         pdf.text_centre(x, y, 7.5, Font::Regular, GREY, l);
     }
+}
+
+/// Two engines' total gain on one polar plot, both against the larger maximum, so
+/// a difference in gain shows as well as one in shape.
+fn polar_pair(pdf: &mut Pdf, cx: f64, cy: f64, r0: f64, a: &[(f64, Gain)], b: &[(f64, Gain)], elevation: Option<bool>, title: &str, info: &[String]) {
+    polar_frame(pdf, cx, cy, r0, elevation, title);
+    let half = elevation == Some(true);
+    let gmax = a.iter().chain(b).map(|(_, g)| g.total).fold(0.0, f64::max);
+    if gmax > 0.0 {
+        let maxdb = 10.0 * gmax.log10();
+        // the second engine wider and underneath, so it shows where the two agree
+        for (data, col, w) in [(b, ENGINE_B, 2.4), (a, ENGINE_A, 1.0)] {
+            let pts: Vec<(f64, f64)> = data
+                .iter()
+                .map(|(t, g)| {
+                    let rel = if g.total > 0.0 { 10.0 * g.total.log10() - maxdb } else { -100.0 };
+                    let rr = r0 * crate::plots::radius_frac(rel) as f64;
+                    let ar = t.to_radians();
+                    (cx + rr * ar.cos(), cy - rr * ar.sin())
+                })
+                .collect();
+            pdf.polyline(&pts, w, col, false);
+        }
+    }
+    let mut y = cy + if half { 16.0 } else { r0 + 22.0 };
+    for l in info {
+        pdf.text_centre(cx, y, 8.0, Font::Regular, INK, l);
+        y += 10.5;
+    }
+}
+
+/// Polar pattern like the app's: rings at 0, −3, −6, −10, −20, −30 dB below the
+/// maximum (ARRL log scale), total (red), horizontal (blue), vertical (green).
+fn polar(pdf: &mut Pdf, cx: f64, cy: f64, r0: f64, data: &[(f64, Gain)], elevation: Option<bool>, title: &str, info: &[String]) {
+    polar_frame(pdf, cx, cy, r0, elevation, title);
+    let half = elevation == Some(true);
     let gmax = data.iter().map(|(_, g)| g.total).fold(0.0, f64::max);
     if gmax > 0.0 {
         let maxdb = 10.0 * gmax.log10();
@@ -268,7 +351,7 @@ fn xy(pdf: &mut Pdf, x: f64, y: f64, w: f64, h: f64, title: &str, xlabel: &str, 
     let py = |v: f64| t + ph - (v - ya) / (yb - ya) * ph;
     for v in crate::plots::ticks((ya / ys).ceil() * ys, yb, ys) {
         pdf.line((l, py(v)), (l + pw, py(v)), 0.3, LIGHT);
-        pdf.text_right(l - 3.0, py(v) + 2.5, 7.0, Font::Regular, GREY, &f(v, if ys < 1.0 { 1 } else { 0 }));
+        pdf.text_right(l - 3.0, py(v) + 2.5, 7.0, Font::Regular, GREY, &f(v, if ys < 0.1 - 1e-9 { 2 } else if ys < 1.0 { 1 } else { 0 }));
     }
     for v in crate::plots::ticks((xa / xs).ceil() * xs, xb, xs) {
         pdf.line((px(v), t), (px(v), t + ph), 0.3, LIGHT);
@@ -284,7 +367,8 @@ fn xy(pdf: &mut Pdf, x: f64, y: f64, w: f64, h: f64, title: &str, xlabel: &str, 
     let mut lx = l + pw;
     for (pts, col, name) in series.iter().rev() {
         let clipped: Vec<(f64, f64)> = pts.iter().map(|&(a, b)| (px(a), py(b.clamp(ya, yb)))).collect();
-        pdf.polyline(&clipped, 1.1, *col, false);
+        // the comparison's second engine wider and underneath, so it shows where the two agree
+        pdf.polyline(&clipped, if *col == ENGINE_B { 2.4 } else { 1.1 }, *col, false);
         lx -= text_width(name, 8.0, Font::Bold) + 8.0;
         pdf.text(lx, y - 5.0, 8.0, Font::Bold, *col, name);
     }
@@ -500,7 +584,7 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
     d.heading("Antenna");
     let g = &ant.ground;
     let mut kv: Vec<(String, String)> = vec![
-        ("Frequency".into(), format!("{} MHz (λ = {:.3} m)", ant.freq_mhz, ant.lambda())),
+        ("Frequency".into(), format!("{} MHz (λ = {:.3} m)", mhz(ant.freq_mhz), ant.lambda())),
         ("Engine".into(), ant.engine.label().into()),
         ("Ground".into(), match g.kind {
             GroundKind::Free => "free space".into(),
@@ -617,8 +701,8 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
             d.para(&how, 8.0, GREY);
             if !c.warnings.is_empty() {
                 d.sub("Notes");
-                for w in &c.warnings {
-                    d.bullet(w);
+                for w in group_notes(&c.warnings) {
+                    d.bullet(&w);
                 }
             }
         }
@@ -745,14 +829,249 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
 
     // ---- matching
     d.heading("Matching");
-    let zl = C::new(st.m_r, st.m_x);
-    let f_hz = st.m_f * 1e6;
-    let r0 = st.m_z0;
+    // the match calculator's impedance once it has been given one, otherwise the
+    // calculation's (a loaded antenna's placeholder is no impedance at all)
+    let picked = if st.m_set {
+        Some((C::new(st.m_r, st.m_x), st.m_f, st.m_z0, "from the match calculator"))
+    } else {
+        calc.map(|c| (c.result.z, c.result.freq_mhz, ant.z0, "from the calculation"))
+    };
+    match picked {
+        None => d.para("Nothing to match yet: calculate the antenna, or give the match calculator an impedance (Tools → Match calculator).", 9.5, GREY),
+        Some((zl, f_mhz, r0, from)) => matching(&mut d, st, zl, f_mhz, r0, from),
+    }
+
+    d.footer();
+    let title = d.title.clone();
+    d.pdf.bytes(&title)
+}
+
+// ------------------------------------------------------------------ engine comparison
+
+/// One engine's results for the engine comparison report.
+pub struct EngineRun {
+    pub label: String,
+    pub calc: Result<FullResult, String>,
+    pub sweep: Result<crate::mom::SweepResult, String>,
+}
+
+/// The same antenna through wiremom and the external NEC program.
+pub struct Comparison {
+    pub runs: Vec<EngineRun>,
+    pub f0: f64,
+    pub f1: f64,
+}
+
+/// Points in the comparison's sweep (±5% round the antenna's frequency).
+const COMPARE_STEPS: usize = 21;
+
+/// Calculates `ant` with wiremom and with the external NEC program: the full
+/// calculation at its frequency, then a sweep. An engine that fails is reported,
+/// not fatal; asking to stop is.
+pub fn compare(ant: &Antenna, prog: &crate::progress::Progress) -> Result<Comparison, String> {
+    fn stopped<T>(r: &Result<T, String>) -> bool {
+        matches!(r, Err(e) if e == crate::progress::STOPPED)
+    }
+    let (f0, f1) = (ant.freq_mhz * 0.95, ant.freq_mhz * 1.05);
+    let program = crate::settings::get().nec_path;
+    let program = Path::new(program.trim()).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let mut runs = vec![];
+    for (engine, label) in [(Engine::Wiremom, "wiremom".to_string()), (Engine::External, if program.is_empty() { "External NEC".to_string() } else { format!("External NEC ({program})") })] {
+        let mut a = ant.clone();
+        a.engine = engine;
+        let calc = crate::mom::calculate_tracked(&a, prog);
+        if stopped(&calc) {
+            return Err(crate::progress::STOPPED.into());
+        }
+        let sweep = crate::mom::sweep_tracked(&a, f0, f1, COMPARE_STEPS, true, prog);
+        if stopped(&sweep) {
+            return Err(crate::progress::STOPPED.into());
+        }
+        runs.push(EngineRun { label, calc, sweep });
+    }
+    Ok(Comparison { runs, f0, f1 })
+}
+
+/// The engine comparison report: the same antenna through both engines, side by side.
+pub fn build_comparison(ant: &Antenna, source: Option<&Path>, cmp: &Comparison) -> Vec<u8> {
+    let stamp = now_utc();
+    let mut d = Doc { pdf: Pdf::new(), y: M, title: format!("Engine comparison: {}", ant.name), stamp: stamp.clone() };
+    let (a, b) = (&cmp.runs[0], &cmp.runs[1]);
+
+    d.pdf.text(M, d.y + 20.0, 20.0, Font::Bold, INK, &format!("Engine comparison: {}", ant.name));
+    d.y += 30.0;
+    let src = source.map(|p| p.display().to_string()).unwrap_or_else(|| "not saved".into());
+    d.para(&format!("File: {src}"), 9.0, GREY);
+    d.para(&format!("Produced by wireant {} on {stamp}", env!("CARGO_PKG_VERSION")), 9.0, GREY);
+
+    d.heading("Antenna");
+    let g = &ant.ground;
+    let segs = |r: &EngineRun| r.calc.as_ref().map(|c| format!("{} segments", c.result.n_segs)).unwrap_or_else(|_| "—".into());
     d.pairs(&[
-        ("Antenna impedance".into(), z_text(zl)),
-        ("Frequency".into(), format!("{} MHz", st.m_f)),
-        ("Matched to".into(), format!("{} Ω (SWR now {:.2})", r0, tools::swr(zl, r0))),
+        ("Frequency".into(), format!("{} MHz (λ = {:.3} m)", mhz(ant.freq_mhz), ant.lambda())),
+        ("Ground".into(), match g.kind {
+            GroundKind::Free => "free space".into(),
+            GroundKind::Perfect => "perfect ground".into(),
+            GroundKind::Real => format!("real ground εr {}, σ {} mS/m", g.eps_r, g.sigma_ms),
+        }),
+        ("Wire material".into(), ant.material.label().into()),
+        ("SWR reference".into(), format!("{} Ω", ant.z0)),
+        ("Wires".into(), format!("{} ({}: {}, {}: {})", ant.wires.len(), a.label, segs(a), b.label, segs(b))),
     ]);
+
+    // ---- at the antenna's frequency
+    d.heading(&format!("At {} MHz", mhz(ant.freq_mhz)));
+    for r in [a, b] {
+        if let Err(e) = &r.calc {
+            d.para(&format!("{} couldn't calculate this antenna: {e}", r.label), 9.5, TOTAL);
+        }
+    }
+    if let (Ok(ca), Ok(cb)) = (&a.calc, &b.calc) {
+        let (ra, rb) = (&ca.result, &cb.result);
+        // units in the first column, so the numbers line up on the right
+        let row = |name: &str, va: f64, vb: f64, dp: usize| {
+            let diff = f(vb - va, dp);
+            // no "−0.00"
+            let diff = if diff.trim_start_matches(['-', '−']).chars().all(|c| c == '0' || c == '.') { f(0.0, dp) } else if vb > va { format!("+{diff}") } else { diff };
+            vec![name.to_string(), f(va, dp), f(vb, dp), diff]
+        };
+        let mut rows = vec![
+            row("Resistance R (Ω)", ra.z.re, rb.z.re, 2),
+            row("Reactance jX (Ω)", ra.z.im, rb.z.im, 2),
+            row(&format!("SWR ({} Ω)", ant.z0), ra.swr, rb.swr, 2),
+            row("Gain (dBi)", ra.ga_dbi, rb.ga_dbi, 2),
+            row("Front/back (dB)", ra.fb_db, rb.fb_db, 2),
+            row("Maximum: azimuth (°)", ra.az_max, rb.az_max, 1),
+            row("Maximum: elevation (°)", ra.el_max, rb.el_max, 1),
+        ];
+        if ra.eff.is_finite() && rb.eff.is_finite() {
+            rows.push(row("Efficiency, radiated (%)", ra.eff * 100.0, rb.eff * 100.0, 1));
+        }
+        rows.push(vec!["Polarisation".into(), pol(ra.horizontal_pol), pol(rb.horizontal_pol), String::new()]);
+        rows.push(vec!["Time (ms)".into(), format!("{:.0}", ra.t_total_ms), format!("{:.0}", rb.t_total_ms), String::new()]);
+        d.table(&["", &a.label, &b.label, "Difference"], &rows, 9.0);
+        d.para("Difference: the second engine's value less the first's.", 8.0, GREY);
+
+        let (pa, pb) = (&ca.patterns, &cb.patterns);
+        let ground = !pa.free_space;
+        let r0: f64 = 105.0;
+        d.need(2.0 * r0 + 80.0);
+        d.y += 8.0;
+        let cy = d.y + r0 + 34.0;
+        let half = |p: &crate::mom::Patterns| -> Vec<(f64, Gain)> { if ground { p.el_cut.iter().filter(|(t, _)| *t <= 180.0).cloned().collect() } else { p.el_cut.clone() } };
+        polar_pair(
+            &mut d.pdf,
+            M + (PAGE_W - 2.0 * M) * 0.25,
+            cy,
+            r0,
+            &pa.az_cut,
+            &pb.az_cut,
+            None,
+            "Horizontal pattern (top view)",
+            &[format!("elevations {:.1}° and {:.1}°", pa.el_cut_deg, pb.el_cut_deg)],
+        );
+        let ecy = if ground { cy + r0 * 0.35 } else { cy };
+        polar_pair(
+            &mut d.pdf,
+            M + (PAGE_W - 2.0 * M) * 0.75,
+            ecy,
+            r0,
+            &half(pa),
+            &half(pb),
+            Some(ground),
+            "Vertical pattern (side view)",
+            &[format!("azimuths {:.1}° and {:.1}°", pa.az_cut_deg, pb.az_cut_deg)],
+        );
+        d.y = cy + r0 + 48.0;
+        let wa = text_width(&a.label, 8.0, Font::Bold);
+        d.pdf.text(M, d.y, 8.0, Font::Bold, ENGINE_A, &a.label);
+        d.pdf.text(M + wa + 12.0, d.y, 8.0, Font::Bold, ENGINE_B, &b.label);
+        d.pdf.text(M + wa + 24.0 + text_width(&b.label, 8.0, Font::Bold), d.y, 8.0, Font::Regular, GREY, "total gain; rings 0, −3, −6, −10, −20, −30 dB below the higher maximum");
+        d.y += 10.0;
+        // a symmetric antenna has no single maximum, and the engines may settle on
+        // different ones: then the cuts aren't through the same direction
+        let apart = |x: f64, y: f64| ((x - y + 180.0).rem_euclid(360.0) - 180.0).abs() > 2.0;
+        if apart(pa.el_cut_deg, pb.el_cut_deg) || apart(pa.az_cut_deg, pb.az_cut_deg) {
+            d.para(
+                "The engines found their maximum in different directions (the pattern may have no single maximum), so these cuts aren't through the same direction and their shapes can't be compared directly.",
+                8.5,
+                TOTAL,
+            );
+        }
+    }
+
+    // ---- sweep (its heading on the same page as the first chart)
+    d.need(230.0);
+    d.heading(&format!("From {} to {} MHz ({COMPARE_STEPS} points)", mhz((cmp.f0 * 1000.0).round() / 1000.0), mhz((cmp.f1 * 1000.0).round() / 1000.0)));
+    for r in [a, b] {
+        if let Err(e) = &r.sweep {
+            d.para(&format!("{} couldn't sweep this antenna: {e}", r.label), 9.5, TOTAL);
+        }
+    }
+    if let (Ok(sa), Ok(sb)) = (&a.sweep, &b.sweep) {
+        let pick = |s: &crate::mom::SweepResult, k: fn(&crate::mom::SweepPoint) -> f64| -> Vec<(f64, f64)> { s.points.iter().map(|p| (p.freq_mhz, k(p))).filter(|p| p.1.is_finite()).collect() };
+        let w = PAGE_W - 2.0 * M;
+        let mark = Some(ant.freq_mhz);
+        let charts: [(&str, fn(&crate::mom::SweepPoint) -> f64, Option<(f64, f64)>); 4] = [
+            ("SWR", |p| p.swr.min(10.0), Some((1.0, 10.0))),
+            ("Gain (dBi)", |p| p.ga_dbi, None),
+            ("Resistance R (Ω)", |p| p.z.re, None),
+            ("Reactance jX (Ω)", |p| p.z.im, None),
+        ];
+        for (title, k, fixed) in charts {
+            let (va, vb) = (pick(sa, k), pick(sb, k));
+            // SWR's fixed range only when it doesn't hide everything
+            let fixed = fixed.filter(|_| va.iter().chain(&vb).any(|p| p.1 < 10.0));
+            d.need(166.0);
+            d.y += 14.0;
+            xy(&mut d.pdf, M, d.y, w, 150.0, title, "MHz", &[(&va, ENGINE_A, &a.label), (&vb, ENGINE_B, &b.label)], fixed, mark);
+            d.y += 152.0;
+        }
+    }
+
+    // ---- notes
+    let notes: Vec<(String, Vec<String>)> = [a, b]
+        .iter()
+        .filter_map(|r| r.calc.as_ref().ok().map(|c| (r.label.clone(), group_notes(&c.warnings))))
+        .filter(|(_, n)| !n.is_empty())
+        .collect();
+    d.heading("Notes");
+    d.para(
+        "Both engines get the same wires, sources, loads and ground. wiremom solves with triangle currents and Galerkin testing; NEC programs \
+         use their own current expansion and point matching, so expect small differences in impedance, and larger ones for thick or closely \
+         spaced wires, sharp bends and wires near the ground. The patterns are each engine's own 1° cuts through its own maximum.",
+        9.0,
+        INK,
+    );
+    for (label, ns) in notes {
+        d.sub(&label);
+        for n in ns {
+            d.bullet(&n);
+        }
+    }
+
+    d.footer();
+    let title = d.title.clone();
+    d.pdf.bytes(&title)
+}
+
+fn pol(horizontal: bool) -> String {
+    if horizontal { "horizontal".into() } else { "vertical".into() }
+}
+
+/// The Matching section for load `zl` at `f_mhz`, matched to `r0`.
+fn matching(d: &mut Doc, st: &ToolsState, zl: C, f_mhz: f64, r0: f64, from: &str) {
+    let f_hz = f_mhz * 1e6;
+    let swr = tools::swr(zl, r0);
+    d.pairs(&[
+        ("Antenna impedance".into(), format!("{} ({from})", z_text(zl))),
+        ("Frequency".into(), format!("{} MHz", mhz(f_mhz))),
+        ("Matched to".into(), format!("{} Ω (SWR now {:.2})", r0, swr)),
+    ]);
+    if swr < 1.02 {
+        d.para(&format!("Already matched to {r0} Ω: no network is needed."), 9.5, INK);
+        return;
+    }
     d.sub("L networks (L and C)");
     let sols = tools::l_networks(zl, r0);
     if sols.is_empty() {
@@ -783,10 +1102,12 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
     }
     d.para("Transmission-line model (ARRL Antenna Book, after Healey); approximate, so model the rod as wires to confirm.", 8.0, GREY);
     d.sub("Coax sections");
-    let lam = 299.792458 / st.m_f;
+    let lam = 299.792458 / f_mhz;
     let len = |deg: f64| deg / 360.0 * lam * st.c_vf;
     let ss = tools::series_section(zl, r0, st.c_z1);
-    if ss.is_empty() {
+    if (st.c_z1 - r0).abs() < 1e-9 {
+        d.bullet(&format!("Series section: not possible with {} Ω, the feeder's own impedance; choose another in the match calculator.", st.c_z1));
+    } else if ss.is_empty() {
         d.bullet(&format!(
             "Series section: not possible with {} Ω (it reaches SWR up to {:.2}; this load is {:.2}).",
             st.c_z1,
@@ -808,9 +1129,6 @@ pub fn build(ant: &Antenna, source: Option<&Path>, calc: Option<&FullResult>, hi
     }
     d.para(&format!("Lengths at velocity factor {} (lossless lines).", st.c_vf), 8.0, GREY);
 
-    d.footer();
-    let title = d.title.clone();
-    d.pdf.bytes(&title)
 }
 
 #[cfg(test)]
@@ -830,6 +1148,51 @@ mod tests {
         assert!(s.contains("/Count ") && full.len() > empty.len());
         let dir = std::env::temp_dir().join("wireant-report-test.pdf");
         std::fs::write(&dir, &full).unwrap();
+    }
+
+    #[test]
+    fn same_wire_notes_are_joined() {
+        let ws: Vec<String> = ["Wire 1: short.", "Wire 2: short.", "Wire 3: short.", "Other note", "Wire 7: short.", "Wire 5: thin."].iter().map(|s| s.to_string()).collect();
+        assert_eq!(group_notes(&ws), vec!["Wires 1–3, 7: short.", "Other note", "Wire 5: thin."]);
+        assert_eq!(mhz(432.29998779296875), "432.299988");
+        assert_eq!(mhz(14.15), "14.15");
+    }
+
+    #[test]
+    fn matching_uses_the_calculation_not_the_placeholder() {
+        // a loaded antenna's match calculator holds its own SWR reference as the load:
+        // already matched, and a 75 Ω series section against 75 Ω has endless "solutions"
+        let mut ant = Antenna::example(0);
+        ant.z0 = 75.0;
+        let mut st = ToolsState::default();
+        st.for_antenna(&ant);
+        let pdf = build(&ant, None, None, &[], &st, &crate::plots::ViewState::default());
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("Nothing to match yet") && !text.contains("Series section"), "no matching without an impedance");
+        // series section with the feeder's own impedance gives nothing, not hundreds
+        assert!(tools::series_section(C::new(30.0, 10.0), 75.0, 75.0).is_empty());
+        assert!(tools::series_section(C::new(75.0, 0.0), 75.0, 50.0).is_empty());
+    }
+
+    /// Needs an external NEC program: run with WIREANT_CONFIG_DIR pointing at settings
+    /// that name one (nec2c will do) and `--ignored`. Writes the PDF to WIREANT_COMPARE_PDF.
+    #[test]
+    #[ignore]
+    fn engine_comparison_with_an_external_nec() {
+        // WIREANT_COMPARE_EXAMPLE picks another built-in example
+        let i = std::env::var("WIREANT_COMPARE_EXAMPLE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let ant = Antenna::example(i);
+        let cmp = compare(&ant, &crate::progress::Progress::default()).unwrap();
+        for r in &cmp.runs {
+            assert!(r.calc.is_ok(), "{}: {:?}", r.label, r.calc.as_ref().err());
+            assert!(r.sweep.is_ok(), "{}: {:?}", r.label, r.sweep.as_ref().err());
+            assert_eq!(r.sweep.as_ref().unwrap().points.len(), COMPARE_STEPS);
+        }
+        let pdf = build_comparison(&ant, None, &cmp);
+        if let Some(p) = std::env::var_os("WIREANT_COMPARE_PDF") {
+            std::fs::write(p, &pdf).unwrap();
+        }
+        assert!(String::from_utf8_lossy(&pdf).contains("Engine comparison"));
     }
 
     #[test]
